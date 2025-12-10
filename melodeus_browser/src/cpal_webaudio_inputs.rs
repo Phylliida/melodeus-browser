@@ -1,4 +1,36 @@
 
+extern crate js_sys;
+extern crate wasm_bindgen;
+extern crate web_sys;
+
+use cpal::SampleRate;
+use js_sys::Array;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{
+    AudioContext, MediaDevices, MediaStream, MediaStreamConstraints, MediaStreamTrack, Navigator,
+};
+
+
+use self::wasm_bindgen::prelude::*;
+use self::wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use self::web_sys::{AudioContext, AudioContextOptions, MediaStream, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag};
+use js_sys::{Float32Array};
+use cpal::{
+    BackendSpecificError, BufferSize, BuildStreamError, Data, DefaultStreamConfigError,
+    DeviceDescription, DeviceDescriptionBuilder, DeviceId, DeviceIdError, DeviceNameError,
+    DevicesError, InputCallbackInfo, OutputCallbackInfo, PauseStreamError, PlayStreamError,
+    SampleFormat, SampleRate, StreamConfig, StreamError, SupportedBufferSize,
+    SupportedStreamConfig, SupportedStreamConfigRange, SupportedStreamConfigsError,
+    StreamInstant,Stream,SampleRate,
+};
+use std::ops::DerefMut;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+
+
 /// Discovered details for a specific audio input device obtained via `getUserMedia` constraints.
 #[derive(Clone, Debug)]
 pub struct InputDeviceInfo {
@@ -7,25 +39,27 @@ pub struct InputDeviceInfo {
     pub sample_rate: SampleRate,
     pub channels: usize,
 }
+fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: SampleRate) -> f64 {
+    buffer_size_frames as f64 / sample_rate as f64
+}
 
-pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsValue>  {
+pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
     let navigator: Navigator = window.navigator();
     let media_devices: MediaDevices = navigator.media_devices()?;
 
-    // Trigger permission with the default input first.
-    let default_constraints = MediaStreamConstraints::new();
-    default_constraints.set_audio(&JsValue::from_bool(true));
-    default_constraints.set_video(&JsValue::from_bool(false));
+    let constraints = MediaStreamConstraints::new();
+    constraints.set_audio(&JsValue::from_bool(true));
+    constraints.set_video(&JsValue::from_bool(false));
 
-    let default_stream = media_devices.get_user_media_with_constraints(&default_constraints)?;
+    let default_stream = media_devices.get_user_media_with_constraints(&constraints)?;
     let default_stream = JsFuture::from(default_stream).await?;
     let default_stream: MediaStream = default_stream.dyn_into()?;
     Ok((media_devices, default_stream))
 }
 
 pub async fn get_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
-   let (media_devices, default_stream) = request_input_access().await?;
+    let (media_devices, default_stream) = request_input_access().await?;
 
     // Now enumerate concrete audio input devices and probe each with its deviceId constraint.
     let devices = JsFuture::from(media_devices.enumerate_devices()?).await?;
@@ -53,27 +87,37 @@ pub async fn get_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
             .and_then(|l| l.as_string())
             .filter(|l| !l.is_empty());
 
-        // initialize a device stream of just that device
-        let constraints = MediaStreamConstraints::new();
+        // Probe the specific device so we can grab its channel count and sample rate.
+        let mut constraints = MediaStreamConstraints::new();
         constraints.set_video(&JsValue::from_bool(false));
 
         let audio_obj = js_sys::Object::new();
         let device_obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&device_obj, &JsValue::from_str("exact"), &JsValue::from_str(&device_id));
+        let _ = js_sys::Reflect::set(
+            &device_obj,
+            &JsValue::from_str("exact"),
+            &JsValue::from_str(&device_id),
+        );
         let _ = js_sys::Reflect::set(&audio_obj, &JsValue::from_str("deviceId"), &device_obj);
         constraints.set_audio(&audio_obj.into());
-        
+
         let device_stream = media_devices.get_user_media_with_constraints(&constraints)?;
         let device_stream = JsFuture::from(device_stream).await?;
-        let _device_stream: MediaStream = device_stream.dyn_into()?;
-        
-        let test_context = web_sys::AudioContext::new()?;
-        // this is necessary to get the sample rate
-        // see https://stackoverflow.com/questions/67378379/how-to-get-the-sample-rate-from-a-mediadevices-getusermedia-stream#comment140026575_76926243
-        let source = test_context.create_media_stream_source(&default_stream)?;
+        let device_stream: MediaStream = device_stream.dyn_into()?;
 
-        let sample_rate = test_context.sample_rate() as SampleRate;
+        let test_context = AudioContext::new()?;
+        // Necessary to read sample rate in some browsers.
+        let source = test_context.create_media_stream_source(&device_stream)?;
+
+        let sample_rate = SampleRate(test_context.sample_rate() as u32);
         let channels = source.channel_count() as usize;
+
+        // Stop tracks to release the device after probing.
+        for track in device_stream.get_tracks().iter() {
+            if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+                track.stop();
+            }
+        }
 
         infos.push(InputDeviceInfo {
             device_id,
@@ -83,8 +127,16 @@ pub async fn get_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
         });
     }
 
+    // Release the default stream we opened to get permission.
+    for track in default_stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+            track.stop();
+        }
+    }
+
     Ok(infos)
 }
+
 
 pub async fn build_input_stream<D, E>(
     device_info: InputDeviceInfo,
@@ -271,7 +323,7 @@ pub async fn build_input_stream_raw<D, E>(
         ctx,
         on_ended_closures: Vec::new(),
         config: stream_config,
-        buffer_size_frames: DEFAULT_BUFFER_SIZE,
+        buffer_size_frames: 10,
         _input_onmessage_closure: Some(js_closure),
     })
 }

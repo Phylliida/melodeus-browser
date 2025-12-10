@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8">
     <title>cpal beep example</title>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
   </head>
   <body>
     <div id="device-controls">
@@ -13,6 +14,7 @@
       <select id="input-devices"></select>
       <input id="refresh-devices" type="button" value="Refresh devices"/>
       <div id="device-status" role="status"></div>
+      <pre id="device-info"></pre>
     </div>
     <div id="playback-controls">
       <input id="play" type="button" value="beep"/>

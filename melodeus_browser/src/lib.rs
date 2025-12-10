@@ -1,3 +1,5 @@
+mod cpal_webaudio_inputs;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::throw_val;
 use web_sys::console;
@@ -46,6 +48,58 @@ where
             })
         })
         .collect()
+}
+
+fn gather_output_devices(host: &cpal::Host) -> Result<(Vec<String>, Array), JsValue> {
+    let devices = host
+        .output_devices()
+        .map_err(|err| js_error(format!("Failed to enumerate output devices: {err}")))?;
+
+    let mut names = Vec::new();
+    let infos = Array::new();
+
+    for (idx, device) in devices.enumerate() {
+        let name = device.name().unwrap_or_else(|err| {
+            console::warn_1(
+                &format!("Failed to read output device name #{idx}: {err}").into(),
+            );
+            format!("Unnamed output device {}", idx + 1)
+        });
+
+        let info = Object::new();
+        Reflect::set(&info, &JsValue::from_str("name"), &JsValue::from_str(&name))?;
+
+        match device.default_output_config() {
+            Ok(cfg) => {
+                Reflect::set(
+                    &info,
+                    &JsValue::from_str("sampleRate"),
+                    &JsValue::from_f64(cfg.sample_rate().0 as f64),
+                )?;
+                Reflect::set(
+                    &info,
+                    &JsValue::from_str("channels"),
+                    &JsValue::from_f64(cfg.channels() as f64),
+                )?;
+            }
+            Err(err) => {
+                console::warn_1(
+                    &format!("Failed to read default output config for {name}: {err}").into(),
+                );
+            }
+        }
+
+        infos.push(&info);
+        names.push(name);
+    }
+
+    Ok((names, infos))
+}
+
+fn input_display_name(info: &cpal_webaudio_inputs::InputDeviceInfo) -> String {
+    info.label
+        .clone()
+        .unwrap_or_else(|| info.device_id.clone())
 }
 
 fn vec_to_js_array(items: &[String]) -> Array {
@@ -137,28 +191,43 @@ pub fn beep_with_output_device(device_name: Option<String>) -> Result<Handle, Js
 }
 
 #[wasm_bindgen]
-pub fn get_audio_devices() -> Result<JsValue, JsValue> {
+pub async fn get_audio_devices() -> Result<JsValue, JsValue> {
     let host = cpal::default_host();
 
-    let input_devices = host
-        .input_devices()
-        .map_err(|err| js_error(format!("Failed to enumerate input devices: {err}")))?;
-    let output_devices = host
-        .output_devices()
-        .map_err(|err| js_error(format!("Failed to enumerate output devices: {err}")))?;
+    let input_infos = cpal_webaudio_inputs::get_input_devices().await?;
+    let inputs: Vec<String> = input_infos
+        .iter()
+        .map(input_display_name)
+        .collect();
 
-    let inputs = collect_device_names(input_devices, "input");
-    let outputs = collect_device_names(output_devices, "output");
+    let (outputs, output_info) = gather_output_devices(&host)?;
 
-    let default_input = host.default_input_device().and_then(|device| match device.name() {
-        Ok(name) => Some(name),
-        Err(err) => {
-            console::warn_1(
-                &format!("Failed to read default input device name: {err}").into(),
-            );
-            None
+    let default_input = input_infos.first().map(input_display_name);
+    let input_info = {
+        let array = Array::new();
+        for info in &input_infos {
+            let name = input_display_name(info);
+            let js_obj = Object::new();
+            Reflect::set(&js_obj, &JsValue::from_str("name"), &JsValue::from_str(&name))?;
+            Reflect::set(
+                &js_obj,
+                &JsValue::from_str("sampleRate"),
+                &JsValue::from_f64(info.sample_rate.0 as f64),
+            )?;
+            Reflect::set(
+                &js_obj,
+                &JsValue::from_str("channels"),
+                &JsValue::from_f64(info.channels as f64),
+            )?;
+            Reflect::set(
+                &js_obj,
+                &JsValue::from_str("deviceId"),
+                &JsValue::from_str(&info.device_id),
+            )?;
+            array.push(&js_obj);
         }
-    });
+        array
+    };
 
     let default_output = host
         .default_output_device()
@@ -197,6 +266,8 @@ pub fn get_audio_devices() -> Result<JsValue, JsValue> {
             .map(|name| JsValue::from_str(&name))
             .unwrap_or(JsValue::NULL),
     )?;
+    Reflect::set(&result, &JsValue::from_str("inputInfo"), &input_info)?;
+    Reflect::set(&result, &JsValue::from_str("outputInfo"), &output_info)?;
 
     Ok(result.into())
 }

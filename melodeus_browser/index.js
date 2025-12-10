@@ -20,6 +20,7 @@ function init(rust) {
   const playButton = document.getElementById("play");
   const stopButton = document.getElementById("stop");
   const statusField = document.getElementById("device-status");
+  const deviceInfoEl = document.getElementById("device-info");
   const requestPermissionButton = document.getElementById("request-permission");
   const monitorButton = document.getElementById("start-monitor");
   const stopMonitorButton = document.getElementById("stop-monitor");
@@ -222,6 +223,54 @@ function init(rust) {
     return "";
   };
 
+  const renderDeviceInfo = (devices) => {
+    if (!deviceInfoEl) {
+      return;
+    }
+    const inputs = Array.isArray(devices.inputInfo)
+      ? Array.from(devices.inputInfo)
+      : [];
+    const outputs = Array.isArray(devices.outputInfo)
+      ? Array.from(devices.outputInfo)
+      : [];
+
+    const formatRate = (v) =>
+      typeof v === "number" && Number.isFinite(v) ? `${v} Hz` : "? Hz";
+    const formatChannels = (v) =>
+      typeof v === "number" && Number.isFinite(v) ? `${v} ch` : "? ch";
+
+    const lines = [];
+    lines.push("Input devices:");
+    if (inputs.length === 0) {
+      lines.push("  (none)");
+    } else {
+      for (const info of inputs) {
+        const name = info.name || info.deviceId || "Unknown input";
+        lines.push(
+          `  - ${name}: ${formatRate(info.sampleRate)}, ${formatChannels(
+            info.channels
+          )}`
+        );
+      }
+    }
+
+    lines.push("Output devices:");
+    if (outputs.length === 0) {
+      lines.push("  (none)");
+    } else {
+      for (const info of outputs) {
+        const name = info.name || "Unknown output";
+        lines.push(
+          `  - ${name}: ${formatRate(info.sampleRate)}, ${formatChannels(
+            info.channels
+          )}`
+        );
+      }
+    }
+
+    deviceInfoEl.textContent = lines.join("\n");
+  };
+
   const updateInputDeviceDescriptors = async () => {
     if (
       !navigator.mediaDevices ||
@@ -256,13 +305,15 @@ function init(rust) {
 
   const refreshDevices = async () => {
     try {
-      const devices = rust.get_audio_devices();
+      const devices = await rust.get_audio_devices();
       const outputs = Array.isArray(devices.outputs)
         ? Array.from(devices.outputs)
         : [];
       const inputs = Array.isArray(devices.inputs)
         ? Array.from(devices.inputs)
         : [];
+
+      renderDeviceInfo(devices);
 
       selectedOutput = populateSelect(
         outputSelect,
