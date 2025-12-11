@@ -22,25 +22,25 @@ pub struct InputDeviceInfo {
 }
 
 
-struct WasmStream {
+pub struct WasmStream {
     audio_context: Option<web_sys::AudioContext>,
 }
 
-impl WasmStream {
-    fn new(audio_context : web_sys::AudioContext) -> Self {
+pub impl WasmStream {
+    pub fn new(audio_context : web_sys::AudioContext) -> Self {
         Self {
             audio_context: Some(audio_context)
         }
     }
 
-    async fn play(&self) -> Result<(), JsErr> {
+    pub async fn play(&self) -> Result<(), JsErr> {
         if let Some(audio_context) = &self.audio_context {
             JsFuture::from(audio_context.resume()?).await;
         }
         Ok(())
     }
 
-    async fn pause(&self) -> Result<(), JsErr> {
+    pub async fn pause(&self) -> Result<(), JsErr> {
         if let Some(audio_context) = &self.audio_context {
             JsFuture::from(audio_context.suspend()?).await;
         }
@@ -89,7 +89,7 @@ fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: u32) -> f64 {
 
 
 
-pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsValue> {
+pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
     let navigator: Navigator = window.navigator();
     let media_devices: MediaDevices = navigator.media_devices()?;
@@ -104,7 +104,7 @@ pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsVal
     Ok((media_devices, default_stream))
 }
 
-pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
+pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr> {
     let (media_devices, default_stream) = request_input_access().await?;
 
     // Now enumerate concrete audio input devices and probe each with its deviceId constraint.
@@ -191,30 +191,11 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
 
 pub async fn build_webaudio_input_stream<D>(
     device_info: InputDeviceInfo,
-    data_callback: D,
-) -> Result<WasmStream, JsValue>
+    mut data_callback: D,
+) -> Result<WasmStream, JsErr>
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
-    Ok(build_webaudio_input_stream_raw(device_info, data_callback).await?)
-    
-    
-    //.map_err(
-    //    |err| -> JsValue {
-    //        (error_callback)(&err.clone());
-    //        err
-    //    }
-    //)?)
-}
-
-pub async fn build_webaudio_input_stream_raw<D>(
-    device_info: InputDeviceInfo,
-    mut data_callback: D,
-) -> Result<WasmStream, JsValue>
-    where
-        D: FnMut(&[f32]) + Send + 'static
-{
-
     let ctx = web_sys::AudioContext::new()?;
     let window = web_sys::window()
                         .ok_or_else(|| JsValue::from_str("window not available"))?;
