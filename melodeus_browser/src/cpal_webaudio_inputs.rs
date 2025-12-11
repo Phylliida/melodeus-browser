@@ -7,10 +7,8 @@ use js_sys::Array;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{AudioContext, AudioContextOptions, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag, Url};
+use web_sys::{AudioContext, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag};
 use js_sys::{Float32Array};
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex, RwLock};
 
 
 /// Discovered details for a specific audio input device obtained via `getUserMedia` constraints.
