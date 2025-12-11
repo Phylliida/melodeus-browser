@@ -1,10 +1,12 @@
 mod cpal_webaudio_inputs;
+mod aec;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::throw_val;
 use web_sys::console;
 use cpal::{SizedSample, FromSample, SampleFormat};
 use js_sys::{Array, Object, Reflect};
+use aec::InputDeviceConfig;
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.

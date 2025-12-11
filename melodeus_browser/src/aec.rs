@@ -45,6 +45,10 @@ use cpal::{
     Device, FromSample, Host, InputCallbackInfo, Sample, SampleFormat, SampleRate, SizedSample,
     Stream, SupportedStreamConfig,
 };
+use cpal::SupportedBufferSize;
+use cpal::BufferSize;
+
+
 use ringbuf::{
     traits::{Consumer, Producer, RingBuffer, Split},
     HeapCons, HeapProd, HeapRb, LocalRb,
@@ -61,7 +65,9 @@ use hound::{WavReader,SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
 
 #[inline]
 unsafe fn assume_init_slice_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
-    &mut *(slice as *mut [MaybeUninit<T>] as *mut [T])
+    unsafe {
+        &mut *(slice as *mut [MaybeUninit<T>] as *mut [T])
+    }
 }
 
 fn input_to_output_frames(input_frames: u128, in_rate: u32, out_rate: u32) -> u128 {
@@ -134,7 +140,7 @@ fn indexed_chirp(idx: u32, sr: u32, dur_s: f32) -> Vec<f32> {
         let t = i as f32 / sr;
         let phase = 2.0 * std::f32::consts::PI * f0 * ((k * t).exp() - 1.0) / k;
         let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos()); // Hann
-        (phase.sin() * w * 0.3) // adjust gain as needed
+        phase.sin() * w * 0.3 // adjust gain as needed
     }).collect()
 }
 
@@ -1268,20 +1274,20 @@ impl OutputStreamAlignerMixer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputDeviceConfig {
-    host_id: cpal::HostId,
-    device_name: String,
-    channels: usize,
-    sample_rate: u32,
-    sample_format: SampleFormat,
+    pub host_id: cpal::HostId,
+    pub device_name: String,
+    pub channels: usize,
+    pub sample_rate: u32,
+    pub sample_format: SampleFormat,
     
     // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
-    history_len: usize,
+    pub history_len: usize,
     // number of packets recieved before we start getting audio data
     // a larger value here will take longer to connect, but result in more accurate timing alignments
-    calibration_packets: u32,
+    pub calibration_packets: u32,
     // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
-    audio_buffer_seconds: u32,
-    resampler_quality: i32
+    pub audio_buffer_seconds: u32,
+    pub resampler_quality: i32
 }
 
 pub impl InputDeviceConfig {
@@ -1336,24 +1342,24 @@ pub impl InputDeviceConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputDeviceConfig {
-    host_id: cpal::HostId,
-    device_name: String,
-    channels: usize,
-    sample_rate: u32,
-    sample_format: SampleFormat,
+    pub host_id: cpal::HostId,
+    pub device_name: String,
+    pub channels: usize,
+    pub sample_rate: u32,
+    pub sample_format: SampleFormat,
     
     // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
-    history_len: usize,
+    pub history_len: usize,
     // number of packets recieved before we start getting audio data
     // a larger value here will take longer to connect, but result in more accurate timing alignments
-    calibration_packets: u32,
+    pub calibration_packets: u32,
     // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
-    audio_buffer_seconds: u32,
-    resampler_quality: i32,
+    pub audio_buffer_seconds: u32,
+    pub resampler_quality: i32,
     // frame size (in terms of samples) should be small, on the order of 1-2ms or less.
     // otherwise you may get skipping if you do not provide audio via enqueue_audio fast enough
     // larger frame sizes will also prevent immediate interruption, as interruption can only happen between each frame
-    frame_size: u32,
+    pub frame_size: u32,
 }
 
 pub impl OutputDeviceConfig {
@@ -1632,29 +1638,7 @@ pub impl AecStream {
            aec3: None,
         })
     }
-
-    pub fn get_available_device_configs(&self) -> Vec<Vec<InputDeviceConfig>> {
-        let host_ids = cpal::available_hosts();
-        for host_id in host_ids {
-            let host = cpal::host_from_id(host_id)?;
-
-            for dev in host.input_devices()? {
-                println!("  input: '{}'", dev.name()?);
-                match supported_device_configs_to_string(&dev, &dev.name()?, "Input") {
-                    Ok(cfgs) => println!("      {cfgs}"),
-                    Err(err) => println!("      {err}"),
-                }
-            }
-            for dev in host.output_devices()? {
-                println!("  output: '{}'", dev.name()?);
-                match supported_device_configs_to_string(&dev, &dev.name()?, "Output") {
-                    Ok(cfgs) => println!("      {cfgs}"),
-                    Err(err) => println!("      {err}"),
-                }
-            }
-        }
-    }
-
+    
     pub fn num_input_channels(&self) -> usize {
         self.input_aligners
             .values()
@@ -2229,15 +2213,16 @@ pub async fn get_supported_output_configs(
     history_len: usize,
     num_calibration_packets: u32,
     audio_buffer_seconds: u32,
-    resampler_quality: i32) -> Result<Vec<Vec<OutputDeviceConfig>>, Box<dyn std::error::Error>>  {
-    let configs = Vec::new();
+    resampler_quality: i32,
+    frame_size: u32) -> Result<Vec<Vec<OutputDeviceConfig>>, Box<dyn std::error::Error>>  {
+    let mut configs = Vec::new();
     // need to use these wrappers to ensure wasm is treated properly
     for host_id in cpal::available_hosts() {
         for output_device_name in get_output_device_names(&host_id).await? {
-            configs.push(get_supported_output_device_configs(&host_id, &output_device_name, num_calibration_packets, audio_buffer_seconds, resampler_quality).await?);
+            configs.push(get_supported_output_device_configs(&host_id, &output_device_name, history_len, num_calibration_packets, audio_buffer_seconds, resampler_quality, frame_size).await?);
         }
     }
-    configs
+    Ok(configs)
 }
 
 pub async fn get_supported_input_configs(
@@ -2245,14 +2230,14 @@ pub async fn get_supported_input_configs(
     num_calibration_packets: u32,
     audio_buffer_seconds: u32,
     resampler_quality: i32) -> Result<Vec<Vec<InputDeviceConfig>>, Box<dyn std::error::Error>> {
-    let configs = Vec::new();
+    let mut configs = Vec::new();
     // need to use these wrappers to ensure wasm is treated properly
     for host_id in cpal::available_hosts() {
         for input_device_name in get_input_device_names(&host_id).await? {
             configs.push(get_supported_input_device_configs(&host_id, &input_device_name, history_len, num_calibration_packets, audio_buffer_seconds, resampler_quality).await?);
         }
     }
-    configs
+    Ok(configs)
 }
 
 fn get_host_by_name(target: &str) -> Option<Host> {
@@ -2364,8 +2349,8 @@ async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, B
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
-    let host = cpal::host_from_id(host_id)?;
-    let available = Vec::new();
+    let host = cpal::host_from_id(*host_id)?;
+    let mut available = Vec::new();
     for dev in host.input_devices()? {
         available.push(dev.name()?.clone());
     }
@@ -2373,8 +2358,8 @@ async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, B
 }
 
 async fn get_output_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
-    let host = cpal::host_from_id(host_id)?;
-    let available = Vec::new();
+    let host = cpal::host_from_id(*host_id)?;
+    let mut available = Vec::new();
     for dev in host.output_devices()? {
         available.push(dev.name()?.clone());
     }
@@ -2382,9 +2367,9 @@ async fn get_output_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, 
 }
 
 
-let COMMON_SAMPLE_RATES = [5512, 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 128000, 176400, 192000, 256000, 352800, 384000, 705600, 768000];
+static COMMON_SAMPLE_RATES: [u32; 21] = [5512, 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 128000, 176400, 192000, 256000, 352800, 384000, 705600, 768000];
 
-fn get_sample_rates_in_range(min_rate: u32, max_rate: u32) {
+fn get_sample_rates_in_range(min_rate: u32, max_rate: u32) -> Vec<u32> {
     let mut rates = HashSet::new();
     rates.insert(min_rate);
     rates.insert(max_rate);
@@ -2397,7 +2382,7 @@ fn get_sample_rates_in_range(min_rate: u32, max_rate: u32) {
     
     let mut list: Vec<u32> = rates.into_iter().collect();
     list.sort_unstable();
-    Ok(list)
+    list
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2411,8 +2396,8 @@ async fn get_supported_input_device_configs(
 
     // wasm only has one
     let default_config = InputDeviceConfig::from_default(
-        host_id,
-        device_name,
+        host_id.clone(),
+        device_name.clone(),
         // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
         history_len, // history_len 
         // number of packets recieved before we start getting audio data
@@ -2425,7 +2410,7 @@ async fn get_supported_input_device_configs(
 
     let result_configs = Vec::new();
     result_configs.push(default_config);
-    reuslt_configs
+    Ok(reuslt_configs)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2439,8 +2424,8 @@ async fn get_supported_input_device_configs(
 ) -> Result<Vec<InputDeviceConfig>, Box<dyn Error>> {
     // put default as first item in list
     let default_config = InputDeviceConfig::from_default(
-        host_id,
-        device_name,
+        host_id.clone(),
+        device_name.clone(),
         // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
         history_len, // history_len 
         // number of packets recieved before we start getting audio data
@@ -2460,12 +2445,12 @@ async fn get_supported_input_device_configs(
     for cfg in configs {
         let min_rate = cfg.min_sample_rate().0;
         let max_rate = cfg.max_sample_rate().0;
-        for sample_rate in get_sample_rates_in_range(min_rate, max_rate) {
+        for sample_rate in get_sample_rates_in_range(min_rate, max_rate).iter() {
             let device_config = InputDeviceConfig::new(
-                host_id,
+                host_id.clone(),
                 device_name.clone(),
                 cfg.channels(),
-                sample_rate,
+                *sample_rate,
                 cfg.sample_format(),
                 history_len,
                 calibration_packets,
@@ -2476,7 +2461,7 @@ async fn get_supported_input_device_configs(
             }
         }
     }
-    result_configs
+    Ok(result_configs)
 }
 
 
@@ -2487,11 +2472,12 @@ async fn get_supported_output_device_configs(
     num_calibration_packets: u32,
     audio_buffer_seconds: u32,
     resampler_quality: i32,
+    frame_size: u32,
 ) -> Result<Vec<OutputDeviceConfig>, Box<dyn Error>> {
     // put default as first item in list
     let default_config = OutputDeviceConfig::from_default(
-        host_id,
-        device_name,
+        host_id.clone(),
+        device_name.clone(),
         // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
         history_len, // history_len 
         // number of packets recieved before we start getting audio data
@@ -2499,7 +2485,8 @@ async fn get_supported_output_device_configs(
         num_calibration_packets, // calibration_packets
         // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
         audio_buffer_seconds, // audio_buffer_seconds
-        resampler_quality // resampler_quality
+        resampler_quality, // resampler_quality
+        frame_size
     ).await?;
 
     let result_configs = Vec::new();
@@ -2511,23 +2498,24 @@ async fn get_supported_output_device_configs(
     for cfg in configs {
         let min_rate = cfg.min_sample_rate().0;
         let max_rate = cfg.max_sample_rate().0;
-        for sample_rate in get_sample_rates_in_range(min_rate, max_rate) {
+        for sample_rate in get_sample_rates_in_range(min_rate, max_rate).iter()  {
             let device_config = OutputDeviceConfig::new(
-                host_id,
+                host_id.clone(),
                 device_name.clone(),
                 cfg.channels(),
-                sample_rate,
+                *sample_rate,
                 cfg.sample_format(),
                 history_len,
                 calibration_packets,
                 audio_buffer_seconds,
-                resampler_quality);
+                resampler_quality,
+                frame_size);
             if device_config != default_config {
                 result_configs.push(device_config);
             }
         }
     }
-    result_configs
+    Ok(result_configs)
 }
 
 fn supported_device_configs_to_string(
@@ -2569,14 +2557,14 @@ fn supported_device_configs_to_string(
 async fn get_default_input_device_config(host_id: &cpal::HostId, device_name: &String) -> Result<SupportedStreamConfig, Box<dyn Error>> {
     let device = select_input_device(
         &host_id,
-        &device_config.device_name
+        &device_name
     ).await?;
 
     // it stores the defaults in the device itself, for wasm
     Ok(SupportedStreamConfig::new(
         device.channels,
         SampleRate(device.sample_rate),
-        SupportedBufferSize::Default,
+        BufferSize::Default,
         device.sample_format,
     ))
 }
@@ -2585,7 +2573,7 @@ async fn get_default_input_device_config(host_id: &cpal::HostId, device_name: &S
 async fn get_default_input_device_config(host_id: &cpal::HostId, device_name: &String) -> Result<SupportedStreamConfig, Box<dyn Error>> {
     let device = select_input_device(
         &host_id,
-        &device_config.device_name
+        &device_name
     ).await?;
 
     device.default_input_config()?
@@ -2605,18 +2593,18 @@ async fn find_matching_input_device_config(
         format != SampleFormat::F32 {
         let supported_str = format!("{} channel(s), {:?}, sample rate: {}",
             device.channels, SampleFormat::F32, device.sample_rate);
-        Err(format!(
-            "Input device '{}' does not support {} channel(s), {:?} at {} Hz. Supported configs: {}",
+        Err(format!("Input device '{}' does not support {} channel(s), {:?} at {} Hz. Supported configs: {}",
             device_name, channels, format, sample_rate, supported_str
+        ).into())
+    } else {
+        // construct it from the device data
+        Ok(SupportedStreamConfig::new(
+            device.channels,
+            SampleRate(device.sample_rate),
+            BufferSize::Default,
+            SampleFormat::F32,
         ))
     }
-    // construct it from the device data
-    Ok(SupportedStreamConfig::new(
-        device.channels,
-        SampleRate(device.sample_rate),
-        SupportedBufferSize::Default,
-        SampleFormat::F32,
-    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
