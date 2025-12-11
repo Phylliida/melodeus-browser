@@ -1101,17 +1101,17 @@ enum OutputStreamMessage {
     InterruptAll(),
 }
 
-struct StreamProducer {
+pub struct StreamProducer {
     producer: HeapProd<f32>
 }
 
 impl StreamProducer {
-    fn new(producer: HeapProd<f32>) -> Self {
+    pub fn new(producer: HeapProd<f32>) -> Self {
         Self {
             producer: producer
         }
     }
-    fn queue_audio(&mut self, audio_data: &[f32]) {
+    pub fn queue_audio(&mut self, audio_data: &[f32]) {
         let num_pushed = self.producer.push_slice(audio_data);
         if num_pushed < audio_data.len() {
             eprintln!("Error: output audio buffer got behind, try increasing buffer size");
@@ -1122,18 +1122,18 @@ impl StreamProducer {
 // we only have one per device (instead of one per channel)
 // because that ensures that multi-channel audio is synchronized properly
 // when sent to output device
-struct OutputStreamAlignerProducer {
-    host_id: cpal::HostId,
-    device_name: String,
-    channels: usize,
-    device_sample_rate: u32,
-    output_stream_sender: mpsc::Sender<OutputStreamMessage>,
-    cur_stream_id: Arc<AtomicU64>,
+pub struct OutputStreamAlignerProducer {
+    pub host_id: cpal::HostId,
+    pub device_name: String,
+    pub channels: usize,
+    pub device_sample_rate: u32,
+    pub output_stream_sender: mpsc::Sender<OutputStreamMessage>,
+    pub cur_stream_id: Arc<AtomicU64>,
 }
 
 impl OutputStreamAlignerProducer {
 
-    fn new(host_id: cpal::HostId, device_name: String, channels: usize, device_sample_rate: u32, output_stream_sender: mpsc::Sender<OutputStreamMessage>) -> Self {
+    pub fn new(host_id: cpal::HostId, device_name: String, channels: usize, device_sample_rate: u32, output_stream_sender: mpsc::Sender<OutputStreamMessage>) -> Self {
         Self {
             host_id: host_id,
             device_name: device_name,
@@ -1144,7 +1144,7 @@ impl OutputStreamAlignerProducer {
         }
     }
 
-    fn begin_audio_stream(&self, channels: usize, channel_map: HashMap<usize, Vec<usize>>, audio_buffer_seconds: u32, sample_rate: u32, resampler_quality: i32) -> Result<(StreamId, StreamProducer), Box<dyn Error>> {
+    pub fn begin_audio_stream(&self, channels: usize, channel_map: HashMap<usize, Vec<usize>>, audio_buffer_seconds: u32, sample_rate: u32, resampler_quality: i32) -> Result<(StreamId, StreamProducer), Box<dyn Error>> {
         // this assigns unique ids in a thread-safe way
         let stream_index = self.cur_stream_id.fetch_add(1, Ordering::Relaxed);
         let (producer, consumer) = HeapRb::<f32>::new((audio_buffer_seconds * sample_rate * (channels as u32)) as usize).split();
@@ -1164,20 +1164,12 @@ impl OutputStreamAlignerProducer {
         Ok((stream_index, StreamProducer::new(producer)))
     }
 
-    fn queue_audio(&self, mut audio_producer: HeapProd<f32>, audio_data: &[f32]) -> HeapProd<f32> {
-        let num_pushed = audio_producer.push_slice(audio_data);
-        if num_pushed < audio_data.len() {
-            eprintln!("Error: output audio buffer got behind, try increasing buffer size");
-        }
-        audio_producer
-    }
-
-    fn end_audio_stream(&self, stream_index: StreamId) -> Result<(), Box<dyn Error>> {
+    pub fn end_audio_stream(&self, stream_index: StreamId) -> Result<(), Box<dyn Error>> {
         self.output_stream_sender.send(OutputStreamMessage::Remove(stream_index))?;
         Ok(())
     }
 
-    fn interrupt_all_streams(&self) -> Result<(), Box<dyn Error>> { 
+    pub fn interrupt_all_streams(&self) -> Result<(), Box<dyn Error>> { 
         self.output_stream_sender.send(OutputStreamMessage::InterruptAll())?;
         Ok(())
     }
