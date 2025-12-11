@@ -61,7 +61,10 @@ use crate::cpal_webaudio_inputs::WasmStream;
 use std::f32::consts::PI;
 use rustfft::num_complex::Complex32;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{UNIX_EPOCH, SystemTime};
+#[cfg(target_arch = "wasm32")]
+use js_sys::Date;
 use hound::{SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
 
 use crate::cpal_webaudio_inputs::get_webaudio_input_devices;
@@ -93,6 +96,22 @@ fn frames_to_micros(frames: u128, sample_rate: u128) -> u128 {
     // frames = (microseconds * sample_rate / 1 000 000)
     // frames * 1_000_000 = microseconds * sample_rate
     frames * 1000000 / sample_rate // = microseconds
+}
+
+#[inline]
+fn now_micros() -> u128 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock went backwards")
+            .as_micros()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Date::now returns milliseconds since epoch as f64.
+        (Date::now() * 1000.0) as u128
+    }
 }
 
 /// Generate a short, Hann-windowed multi-tone probe at 16 kHz sample rate.
@@ -666,7 +685,7 @@ impl StreamAlignerProducer {
     }
 
     fn process_chunk(&mut self, chunk: &[f32]) -> Result<(), Box<dyn Error>> {
-        let micros_when_chunk_received = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock went backwards").as_micros();
+        let micros_when_chunk_received = now_micros();
 
        
         let appended_count = self.input_audio_buffer_producer.push_slice(chunk);
@@ -1976,7 +1995,8 @@ impl AecStream {
         let start_micros = if let Some(start_micros_value) = self.start_micros {
             start_micros_value
         } else {
-            let start_micros_value = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock went backwards").as_micros() - frames_to_micros(chunk_size as u128, self.aec_config.target_sample_rate as u128);
+            let start_micros_value = now_micros()
+                .saturating_sub(frames_to_micros(chunk_size as u128, self.aec_config.target_sample_rate as u128));
             self.start_micros = Some(start_micros_value);
             start_micros_value
         };

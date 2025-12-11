@@ -2,10 +2,14 @@ use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
 use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
+
 // Tiny replacement for the libc allocators used by the translated Speex code.
 // We stash the payload size in a prefix so `free`/`realloc` can recover it.
 const HEADER_SIZE: usize = std::mem::size_of::<usize>();
-const DEFAULT_ALIGN: usize = std::mem::align_of::<usize>();
+// Align generously (16 bytes) to avoid misalignment traps in wasm for wider types.
+const DEFAULT_ALIGN: usize = 16;
 
 #[inline]
 fn layout_for_payload(size: usize) -> Option<Layout> {
@@ -27,7 +31,8 @@ unsafe fn read_len(base: *const u8) -> usize {
 pub unsafe fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     let payload = match nmemb.checked_mul(size) {
         Some(sz) if sz > 0 => sz,
-        _ => return ptr::null_mut(),
+        // Some callers pass a zero-sized alloc; emulate libc by handing out a unique pointer.
+        _ => 1,
     };
     let layout = match layout_for_payload(payload) {
         Some(l) => l,
@@ -44,12 +49,9 @@ pub unsafe fn calloc(nmemb: usize, size: usize) -> *mut c_void {
 /// realloc replacement that preserves the recorded size header.
 pub unsafe fn realloc_bytes(ptr: *mut c_void, size: usize) -> *mut c_void {
     if ptr.is_null() {
-        return calloc(1, size);
+        return calloc(1, size.max(1));
     }
-    let payload = match size.checked_add(0) {
-        Some(sz) => sz,
-        None => return ptr::null_mut(),
-    };
+    let payload = size.max(1);
     let new_layout = match layout_for_payload(payload) {
         Some(l) => l,
         None => return ptr::null_mut(),
@@ -97,18 +99,28 @@ fn cstr_to_string(ptr: *const c_char) -> String {
     unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
 }
 
+fn log_error(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::error_1(&JsValue::from_str(text));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{text}");
+}
+
 pub unsafe fn warn(msg: *const c_char) {
     let text = cstr_to_string(msg);
-    eprintln!("speex warning: {}", text);
+    log_error(&format!("speex warning: {}", text));
 }
 
 pub unsafe fn warn_int(msg: *const c_char, val: c_int) {
     let text = cstr_to_string(msg);
-    eprintln!("speex warning: {} {}", text, val);
+    log_error(&format!("speex warning: {} {}", text, val));
 }
 
 pub unsafe fn fatal(msg: *const c_char, file: *const c_char, line: c_int) -> ! {
     let m = cstr_to_string(msg);
     let f = cstr_to_string(file);
+    log_error(&format!("Speex fatal error in {} line {}: {}", f, line, m));
     panic!("Speex fatal error in {} line {}: {}", f, line, m);
 }
