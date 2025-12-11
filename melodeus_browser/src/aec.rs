@@ -34,7 +34,6 @@ use std::{
     },
 };
 use aec3::voip::VoipAec3;
-use fdaf_aec::FdafAec;
 
 use std::backtrace::Backtrace;
 
@@ -54,9 +53,8 @@ use ringbuf::{
     HeapCons, HeapProd, HeapRb, LocalRb,
 };
 use ringbuf::storage::Heap;
-use speex_rust_aec::{
-    speex_echo_cancellation, EchoCanceller, Resampler,
-};
+use crate::speex::{Resampler};
+use crate::cpal_webaudio_inputs::WasmStream;
 use std::f32::consts::PI;
 use rustfft::num_complex::Complex32;
 
@@ -793,7 +791,7 @@ impl StreamAlignerResampler {
             println!("Decrease dynamic sample");
         }
         //self.dynamic_output_sample_rate = (((self.output_sample_rate as f32) * 0.95) as i128).max((self.dynamic_output_sample_rate-1) as i128) as u32;
-        //self.input_audio_buffer_consumer.set_sample_rate(self.input_sample_rate, self.dynamic_output_sample_rate)?;
+        self.input_audio_buffer_consumer.set_sample_rate(self.input_sample_rate, self.dynamic_output_sample_rate)?;
         Ok(())
     }
 
@@ -803,7 +801,7 @@ impl StreamAlignerResampler {
             println!("Increase dynamic sample");
         }
         //self.dynamic_output_sample_rate = (((self.output_sample_rate as f32) * 1.05) as i128).min((self.dynamic_output_sample_rate+1) as i128) as u32;
-        //self.input_audio_buffer_consumer.set_sample_rate(self.input_sample_rate, self.dynamic_output_sample_rate)?;
+        self.input_audio_buffer_consumer.set_sample_rate(self.input_sample_rate, self.dynamic_output_sample_rate)?;
         Ok(())
     }
 
@@ -1295,7 +1293,7 @@ pub struct InputDeviceConfig {
     pub resampler_quality: i32
 }
 
-pub impl InputDeviceConfig {
+impl InputDeviceConfig {
     pub fn new(
         host_id: cpal::HostId,
         device_name: String,
@@ -1367,7 +1365,7 @@ pub struct OutputDeviceConfig {
     pub frame_size: u32,
 }
 
-pub impl OutputDeviceConfig {
+impl OutputDeviceConfig {
     pub fn new(
         host_id: cpal::HostId,
         device_name: String,
@@ -1430,7 +1428,7 @@ pub struct AecConfig {
     filter_length: usize
 }
 
-pub impl AecConfig {
+impl AecConfig {
     pub fn new(target_sample_rate: u32, frame_size: usize, filter_length: usize) -> Self {
         Self { target_sample_rate, frame_size, filter_length }
     }
@@ -1586,7 +1584,7 @@ enum DeviceUpdateMessage {
 }
 
 pub struct AecStream {
-    aec: Option<EchoCanceller>,
+    //aec: Option<EchoCanceller>,
     aec_config: AecConfig,
     device_update_sender: mpsc::Sender<DeviceUpdateMessage>,
     device_update_receiver: mpsc::Receiver<DeviceUpdateMessage>,
@@ -1606,11 +1604,10 @@ pub struct AecStream {
     output_audio_buffer: Vec<i16>,
     aec_audio_buffer: Vec<i16>,
     aec_out_audio_buffer: Vec<f32>,
-    aec2: Option<FdafAec>,
     aec3: Option<VoipAec3>,
 }
 
-pub impl AecStream {
+impl AecStream {
     pub fn new(
         aec_config: AecConfig
     ) -> Result<Self, Box<dyn Error>> {
@@ -1619,7 +1616,7 @@ pub impl AecStream {
         }
         let (device_update_sender, device_update_receiver) = mpsc::channel::<DeviceUpdateMessage>();
         Ok(Self {
-           aec: None,
+           //aec: None,
            aec_config: aec_config,
            device_update_sender: device_update_sender,
            device_update_receiver: device_update_receiver,
@@ -1639,7 +1636,6 @@ pub impl AecStream {
            output_audio_buffer: Vec::new(),
            aec_audio_buffer: Vec::new(),
            aec_out_audio_buffer: Vec::new(),
-           aec2: None,
            aec3: None,
         })
     }
@@ -1671,7 +1667,8 @@ pub impl AecStream {
 
         //self.aec2 = Some(FdafAec::new(1024, 0.02));
 
-        (self.aec, self.aec3) = if self.input_channels > 0 && self.output_channels > 0 {
+        
+        /*(self.aec, self.aec3) = if self.input_channels > 0 && self.output_channels > 0 {
             (EchoCanceller::new_multichannel(
                 self.aec_config.frame_size,
                 self.aec_config.filter_length,
@@ -1688,16 +1685,22 @@ pub impl AecStream {
             //    self.aec_config.filter_length
             //)
 
-
+        */
+        self.aec3 = if self.input_channels > 0 && self.output_channels > 0 {
+            Some(VoipAec3::builder(self.aec_config.target_sample_rate as i32, self.input_channels, self.output_channels)
+            .initial_delay_ms((self.aec_config.frame_size/3) as i32)
+            .enable_high_pass(true)
+            .build()
+            .expect("failed to create AEC pipeline"))
         } else {
-            (None, None)
+            None
         };
 
-        if let Some(aec) = self.aec.as_mut() {
-            aec.set_sampling_rate(self.aec_config.target_sample_rate);
-            let sampling_rate = aec.sampling_rate();
-            println!("Set sampling rate to {sampling_rate}");
-        }
+        //if let Some(aec) = self.aec.as_mut() {
+        //    aec.set_sampling_rate(self.aec_config.target_sample_rate);
+        //    let sampling_rate = aec.sampling_rate();
+        //    println!("Set sampling rate to {sampling_rate}");
+        //}
 
         self.input_audio_buffer.clear();
         self.input_audio_buffer.resize(self.aec_config.frame_size * self.input_channels, 0 as i16);
@@ -2141,9 +2144,9 @@ pub impl AecStream {
                 &self.aec_audio_buffer
             }
             else {
-                let Some(aec) = self.aec.as_mut() else { 
-                    return Err("no aec".into());
-                };
+                //let Some(aec) = self.aec.as_mut() else { 
+                //    return Err("no aec".into());
+                //};
                 
                 // skip ahead if no output, as there's nothing to cancel
                 // this helps avoid needing to recalibrate every time we recieve audio
@@ -2279,7 +2282,7 @@ async fn select_input_device(
             let mut available = Vec::new();
 
             for device in device_iter {
-                let name = device.device_id;
+                let name = device.device_id.clone();
                 available.push(name.clone());
 
                 if &name == device_name {
@@ -2413,7 +2416,7 @@ async fn get_supported_input_device_configs(
         resampler_quality // resampler_quality
     ).await?;
 
-    let result_configs = Vec::new();
+    let mut result_configs = Vec::new();
     result_configs.push(default_config);
     Ok(result_configs)
 }
@@ -2494,10 +2497,10 @@ async fn get_supported_output_device_configs(
         frame_size
     ).await?;
 
-    let result_configs = Vec::new();
-    result_configs.push(default_config);
+    let mut result_configs = Vec::new();
+    result_configs.push(default_config.clone());
 
-    let host = cpal::host_from_id(host_id)?;
+    let host = cpal::host_from_id(*host_id)?;
     let device = select_device(host.output_devices(), &device_name, "Output")?;
     let configs : Vec<_> = device.supported_output_configs().map(|configs| configs.collect())
             .map_err(|err| format!("Unable to enumerate output configs for '{device_name}': {err}"))?;
@@ -2509,7 +2512,7 @@ async fn get_supported_output_device_configs(
             let device_config = OutputDeviceConfig::new(
                 host_id.clone(),
                 device_name.clone(),
-                cfg.channels(),
+                cfg.channels() as usize,
                 *sample_rate,
                 cfg.sample_format(),
                 history_len,
@@ -2702,7 +2705,7 @@ async fn build_input_alignment_stream(
     config: &InputDeviceConfig,
     supported_config: SupportedStreamConfig,
     channel_aligners: StreamAlignerProducer,
-) -> Result<Stream, cpal::BuildStreamError> {
+) -> Result<InputStream, Box<dyn Error>> {
     match config.sample_format {
         SampleFormat::I16 => build_input_alignment_stream_typed::<i16>(
             device,
@@ -2727,7 +2730,7 @@ async fn build_input_alignment_stream(
                 "Input device '{0}' uses unsupported sample format {other:?}; cannot build StreamAligner.",
                 config.device_name
             );
-            Err(cpal::BuildStreamError::StreamConfigNotSupported)
+            Err(Box::new(cpal::BuildStreamError::StreamConfigNotSupported))
         }
     }
 }
@@ -2738,7 +2741,7 @@ async fn build_input_alignment_stream_typed<T>(
     config: &InputDeviceConfig,
     supported_config: SupportedStreamConfig,
     mut channel_aligner: StreamAlignerProducer,
-) -> Result<Stream, cpal::BuildStreamError>
+) -> Result<InputStream, Box<dyn Error>>
 where
     T: Sample + SizedSample,
     f32: FromSample<T>,
@@ -2778,13 +2781,13 @@ async fn build_input_alignment_stream_typed<T>(
     config: &InputDeviceConfig,
     supported_config: SupportedStreamConfig,
     mut channel_aligner: StreamAlignerProducer,
-) -> Result<Stream, cpal::BuildStreamError>
+) -> Result<InputStream, Box<dyn Error>>
 where
     T: Sample + SizedSample,
     f32: FromSample<T>,
 {    
     let device_name_inner = config.device_name.clone();
-    Ok(build_webaudio_input_stream(*device as InputDeviceInfo, move |data: &[f32]| {
+    Ok(build_webaudio_input_stream(device as &InputDeviceInfo, move |data: &[f32]| {
         if let Err(err) = channel_aligner.process_chunk(data) {
                 eprintln!("Input stream '{device_name_inner}' error when process chunk {err}");
         }

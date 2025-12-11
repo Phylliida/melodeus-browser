@@ -30,6 +30,11 @@ wee_alloc = { version = "0.4.2", optional = true }
 thiserror = "2.0.17"
 ringbuf = "0.4.8"
 
+aec3 = { path = "../../aec3-rs" }
+rustfft = "6.4.1"
+hound = "3.5.1"
+
+
 # The `web-sys` crate allows you to interact with the various browser APIs,
 # like the DOM.
 [dependencies.web-sys]
@@ -52,6 +57,7 @@ features = [
     "Navigator",
     "Url",
 ]
+
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires

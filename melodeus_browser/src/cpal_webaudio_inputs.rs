@@ -26,7 +26,7 @@ pub struct WasmStream {
     audio_context: Option<web_sys::AudioContext>,
 }
 
-pub impl WasmStream {
+impl WasmStream {
     pub fn new(audio_context : web_sys::AudioContext) -> Self {
         Self {
             audio_context: Some(audio_context)
@@ -190,7 +190,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
 
 
 pub async fn build_webaudio_input_stream<D>(
-    device_info: InputDeviceInfo,
+    device_info: &InputDeviceInfo,
     mut data_callback: D,
 ) -> Result<WasmStream, JsErr>
     where

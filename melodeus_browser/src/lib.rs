@@ -1,5 +1,31 @@
+
+#![allow(unsafe_op_in_unsafe_fn)]
+
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    dead_code,
+    improper_ctypes,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    clippy::restriction,
+    clippy::complexity,
+    clippy::perf,
+    clippy::style,
+    clippy::suspicious,
+    clippy::tests_outside_test_module,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 mod cpal_webaudio_inputs;
 mod aec;
+#[path = "speex/lib.rs"]
+pub mod speex;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::throw_val;
