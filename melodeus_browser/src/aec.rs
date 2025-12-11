@@ -1267,7 +1267,7 @@ impl OutputStreamAlignerMixer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct InputDeviceConfig {
+pub struct InputDeviceConfig {
     host_id: cpal::HostId,
     device_name: String,
     channels: usize,
@@ -1284,8 +1284,8 @@ struct InputDeviceConfig {
     resampler_quality: i32
 }
 
-impl InputDeviceConfig {
-    fn new(
+pub impl InputDeviceConfig {
+    pub fn new(
         host_id: cpal::HostId,
         device_name: String,
         channels: usize,
@@ -1310,7 +1310,7 @@ impl InputDeviceConfig {
     }
 
     /// Build a config using the device's default input settings plus caller-provided buffer/resampler tuning.
-    async fn from_default(
+    pub async fn from_default(
         host_id: cpal::HostId,
         device_name: String,
         history_len: usize,
@@ -1335,7 +1335,7 @@ impl InputDeviceConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OutputDeviceConfig {
+pub struct OutputDeviceConfig {
     host_id: cpal::HostId,
     device_name: String,
     channels: usize,
@@ -1356,8 +1356,8 @@ struct OutputDeviceConfig {
     frame_size: u32,
 }
 
-impl OutputDeviceConfig {
-    fn new(
+pub impl OutputDeviceConfig {
+    pub fn new(
         host_id: cpal::HostId,
         device_name: String,
         channels: usize,
@@ -1384,7 +1384,7 @@ impl OutputDeviceConfig {
     }
 
     /// Build a config using the device's default output settings plus caller-provided buffer/resampler tuning.
-    async fn from_default(
+    pub async fn from_default(
         host_id: cpal::HostId,
         device_name: String,
         history_len: usize,
@@ -1413,14 +1413,14 @@ impl OutputDeviceConfig {
     }
 }
 
-struct AecConfig {
+pub struct AecConfig {
     target_sample_rate: u32,
     frame_size: usize,
     filter_length: usize
 }
 
-impl AecConfig {
-    fn new(target_sample_rate: u32, frame_size: usize, filter_length: usize) -> Self {
+pub impl AecConfig {
+    pub fn new(target_sample_rate: u32, frame_size: usize, filter_length: usize) -> Self {
         Self { target_sample_rate, frame_size, filter_length }
     }
 }
@@ -1574,7 +1574,7 @@ enum DeviceUpdateMessage {
     RemoveOutputDevice(String)
 }
 
-struct AecStream {
+pub struct AecStream {
     aec: Option<EchoCanceller>,
     aec_config: AecConfig,
     device_update_sender: mpsc::Sender<DeviceUpdateMessage>,
@@ -1599,8 +1599,8 @@ struct AecStream {
     aec3: Option<VoipAec3>,
 }
 
-impl AecStream {
-    fn new(
+pub impl AecStream {
+    pub fn new(
         aec_config: AecConfig
     ) -> Result<Self, Box<dyn Error>> {
         if aec_config.target_sample_rate == 0 {
@@ -1633,9 +1633,7 @@ impl AecStream {
         })
     }
 
-    fn get_device_configs(&self) -> 
-
-    fn get_available_device_configs(&self) -> Vec<Vec<InputDeviceConfig>> {
+    pub fn get_available_device_configs(&self) -> Vec<Vec<InputDeviceConfig>> {
         let host_ids = cpal::available_hosts();
         for host_id in host_ids {
             let host = cpal::host_from_id(host_id)?;
@@ -1657,14 +1655,14 @@ impl AecStream {
         }
     }
 
-    fn num_input_channels(&self) -> usize {
+    pub fn num_input_channels(&self) -> usize {
         self.input_aligners
             .values()
             .map(|aligner| aligner.channels)
             .sum()
     }
 
-    fn num_output_channels(&self) -> usize {
+    pub fn num_output_channels(&self) -> usize {
         self.output_aligners
             .values()
             .map(|aligner| aligner.channels)
@@ -1723,29 +1721,29 @@ impl AecStream {
         Ok(())
     }
 
-    async fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
         let (stream, aligners) = get_input_stream_aligners(config, &self.aec_config).await?;
         self.device_update_sender.send(DeviceUpdateMessage::AddInputDevice(config.device_name.clone(), stream, aligners))?;
         Ok(())
     }
 
-    async fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
+    pub async fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
         let (stream, producer, consumer) = get_output_stream_aligners(config, &self.aec_config)?;
         self.device_update_sender.send(DeviceUpdateMessage::AddOutputDevice(config.device_name.clone(), stream, consumer))?;
         Ok(producer)
     }
 
-    fn remove_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
         self.device_update_sender.send(DeviceUpdateMessage::RemoveInputDevice(config.device_name.clone()))?;
         Ok(())
     }
 
-    fn remove_output_device(&mut self, config: &OutputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove_output_device(&mut self, config: &OutputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
         self.device_update_sender.send(DeviceUpdateMessage::RemoveOutputDevice(config.device_name.clone()))?;
         Ok(())
     }
 
-    fn calibrate(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn calibrate(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(), Box<dyn std::error::Error>> {
         let (output_offsets, input_offsets) = self.get_calibration_offsets(output_producers, debug_wav)?;
         // we need to throw away some samples for each device until we are calibrated
         // each device will have an offset (could be negative)
@@ -1981,7 +1979,7 @@ impl AecStream {
 
     // calls update, but returns all involved audio buffers
     // (if needed for diagnostic reasons, usually .update() (which returns aec'd inputs) should be all you need)
-    fn update_debug(&mut self) -> Result<(&[i16], &[i16], &[f32], u128, u128), Box<dyn std::error::Error>> {
+    pub fn update_debug(&mut self) -> Result<(&[i16], &[i16], &[f32], u128, u128), Box<dyn std::error::Error>> {
         let (start_time, end_time) = {
             let (_, start_time, end_time) = self.update()?;
             (start_time, end_time)
@@ -1989,7 +1987,7 @@ impl AecStream {
         return Ok((self.input_audio_buffer.as_slice(), self.output_audio_buffer.as_slice(), self.aec_out_audio_buffer.as_slice(), start_time, end_time));
     }
 
-    fn update(&mut self) -> Result<(&[f32], u128, u128), Box<dyn std::error::Error>> {
+    pub fn update(&mut self) -> Result<(&[f32], u128, u128), Box<dyn std::error::Error>> {
         let chunk_size = self.aec_config.frame_size;
         let start_micros = if let Some(start_micros_value) = self.start_micros {
             start_micros_value
@@ -2227,7 +2225,7 @@ impl AecStream {
     
 
 
-async fn get_supported_output_configs(
+pub async fn get_supported_output_configs(
     history_len: usize,
     num_calibration_packets: u32,
     audio_buffer_seconds: u32,
@@ -2242,7 +2240,7 @@ async fn get_supported_output_configs(
     configs
 }
 
-async fn get_supported_input_configs(
+pub async fn get_supported_input_configs(
     history_len: usize,
     num_calibration_packets: u32,
     audio_buffer_seconds: u32,
