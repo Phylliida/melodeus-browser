@@ -14,6 +14,14 @@ module.exports = {
     path: dist,
     filename: "[name].js"
   },
+  performance: {
+    hints: false, // allow larger wasm bundle without noisy warnings
+  },
+  resolve: {
+    alias: {
+      env: path.resolve(__dirname, "env-stub.js"),
+    },
+  },
   experiments: {
     syncWebAssembly: true
   },

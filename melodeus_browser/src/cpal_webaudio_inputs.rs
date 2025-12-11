@@ -35,14 +35,14 @@ impl WasmStream {
 
     pub async fn play(&self) -> Result<(), JsErr> {
         if let Some(audio_context) = &self.audio_context {
-            JsFuture::from(audio_context.resume()?).await;
+            JsFuture::from(audio_context.resume()?).await?;
         }
         Ok(())
     }
 
     pub async fn pause(&self) -> Result<(), JsErr> {
         if let Some(audio_context) = &self.audio_context {
-            JsFuture::from(audio_context.suspend()?).await;
+            JsFuture::from(audio_context.suspend()?).await?;
         }
         Ok(())
     }
@@ -71,7 +71,15 @@ impl Drop for WasmStream {
             wasm_bindgen_futures::spawn_local(async move { 
                 match ctx.close() {
                     Ok(val) => {
-                        JsFuture::from(val).await;
+                        match JsFuture::from(val).await {
+                            Ok(_) => {
+
+                            }
+                            Err(err) => {
+                                let error_error = JsErr::from(err);
+                                eprintln!("Cleanup wasm stream failed: {error_error}");
+                            }
+                        }
                     }
                     Err(err) => {
                         let error_error = JsErr::from(err);
@@ -165,7 +173,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
             }
         }
 
-        JsFuture::from(test_context.close()?).await;
+        JsFuture::from(test_context.close()?).await?;
 
         let sample_format = SampleFormat::F32;
 

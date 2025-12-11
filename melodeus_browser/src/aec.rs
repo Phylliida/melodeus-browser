@@ -288,17 +288,17 @@ fn gcc_phat_delay(x_in: &[f32], y_in: &[f32]) -> isize {
     let y = normalize(y_in);
     let n = x.len();
     // Prepare complex buffers
-    let mut X: Vec<Complex<f32>> = x.iter().map(|&v| Complex::new(v, 0.0)).collect();
-    let mut Y: Vec<Complex<f32>> = y.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    let mut x_vec: Vec<Complex<f32>> = x.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    let mut y_vec: Vec<Complex<f32>> = y.iter().map(|&v| Complex::new(v, 0.0)).collect();
 
     // Forward FFT
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(n);
-    fft.process(&mut X);
-    fft.process(&mut Y);
+    fft.process(&mut x_vec);
+    fft.process(&mut y_vec);
 
     // Cross-spectrum with PHAT weighting: G = X * conj(Y); Psi = G / |G|
-    let mut psi: Vec<Complex<f32>> = X.iter().zip(Y.iter()).map(|(&xk, &yk)| {
+    let mut psi: Vec<Complex<f32>> = x_vec.iter().zip(y_vec.iter()).map(|(&xk, &yk)| {
         let g = xk * yk.conj();
         let mag = (g.re * g.re + g.im * g.im).sqrt();
         if mag > 1e-12 { g / mag } else { Complex::new(0.0, 0.0) }
@@ -1133,7 +1133,7 @@ pub struct OutputStreamAlignerProducer {
 
 impl OutputStreamAlignerProducer {
 
-    pub fn new(host_id: cpal::HostId, device_name: String, channels: usize, device_sample_rate: u32, output_stream_sender: mpsc::Sender<OutputStreamMessage>) -> Self {
+    fn new(host_id: cpal::HostId, device_name: String, channels: usize, device_sample_rate: u32, output_stream_sender: mpsc::Sender<OutputStreamMessage>) -> Self {
         Self {
             host_id: host_id,
             device_name: device_name,
@@ -1234,7 +1234,7 @@ impl OutputStreamAlignerMixer {
             // this doesn't work because it'll stall for very large audio
             // resample_producer.resample_all()?; // do resampling of any available data
             // instead, do it streaming
-            resample_producer.resample((target_input_samples as u32) * 2); // do * 2 so we also grab some leftovers if there are some, this is an upper bound
+            resample_producer.resample((target_input_samples as u32) * 2)?; // do * 2 so we also grab some leftovers if there are some, this is an upper bound
             let buf_from_stream = resample_consumer.get_chunk_to_read(round_to_channels(actual_input_chunk_size as u32, *channels) as usize);
             let frames = (buf_from_stream.len() / *channels as usize).min(frames_cap);
             if frames == 0 {
@@ -1263,7 +1263,7 @@ impl OutputStreamAlignerMixer {
             resample_consumer.finish_read(num_read);
         }
         // send output downstream to the eac
-        self.resampled_audio_buffer_producer.process_chunk(device_buf_write);
+        self.resampled_audio_buffer_producer.process_chunk(device_buf_write)?;
         // finish writing to output device buffer
         self.device_audio_producer.finish_write(need_to_write_device_values, frames_cap * self.channels);
         Ok(())
