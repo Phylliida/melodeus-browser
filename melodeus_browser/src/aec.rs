@@ -1427,6 +1427,7 @@ impl AecConfig {
 
 async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config: &AecConfig) -> Result<(InputStream, StreamAlignerConsumer), Box<dyn std::error::Error>>  {
 
+    // we need to use these methods instead of the more generic select_device because of wasm wrapping to workaround cpal not having webaudio input device support
     let device = select_input_device(
         &device_config.host_id,
         &device_config.device_name
@@ -1437,9 +1438,8 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
         &device_config.device_name,
         device_config.channels,
         device_config.sample_rate,
-        device_config.sample_format,
-        "Input",
-    )await?;
+        device_config.sample_format
+    ).await?;
     
 
     let (producer, mut resampler, consumer) = create_stream_aligner(
@@ -1474,7 +1474,13 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
     )?;
 
     // start input stream
-    stream.play()?;
+    cfg_if::cfg_if! {
+        if #[cfg(all(target_arch = "wasm32"))] {
+            stream.play().await?; // wasm is async
+        } else {
+            stream.play()?;
+        }
+    }
 
     Ok((stream, consumer))
 }
@@ -2329,6 +2335,7 @@ async fn find_matching_input_device_config(
     sample_rate: u32,
     format: SampleFormat,
 ) -> Result<SupportedStreamConfig, Box<dyn Error>> {
+    // wasm only supports one format (for some browsers), just check against that
     if channels != device.channels || 
         sample_rate != device.sample_rate ||
         format != SampleFormat::F32 {
@@ -2339,6 +2346,13 @@ async fn find_matching_input_device_config(
             device_name, channels, format, sample_rate, supported_str
         ))
     }
+    // construct it from the device data
+    Ok(SupportedStreamConfig::new(
+        device.channels,
+        SampleRate(device.sample_rate),
+        SupportedBufferSize::Default,
+        SampleFormat::F32,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

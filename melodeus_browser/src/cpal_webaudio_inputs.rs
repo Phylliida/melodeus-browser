@@ -22,9 +22,43 @@ pub struct InputDeviceInfo {
     pub sample_rate: u32,
     pub channels: usize,
 }
+
+
+struct WasmStream {
+    audio_context: web_sys::AudioContext,
+}
+
+impl WasmStream {
+    fn new(audio_context : web_sys::AudioContext) -> Self {
+        Self {
+            audio_context: audio_context
+        }
+    }
+
+    async fn play(&self) -> Result<(), Box<dyn Error>> {
+        self.audio_context.resume().await?;
+        Ok(())
+    }
+
+    async fn pause(&self) -> Result<(), Box<dyn Error>> {
+        self.audio_context.suspend().await?;
+        Ok(())
+    }
+}
+
+impl Drop for WasmStream {
+    fn drop(&mut self) {
+        wasm_bindgen_futures::spawn_local(async move { 
+            self.audio_context.close().await;
+        });
+    }
+}
+
 fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: u32) -> f64 {
     buffer_size_frames as f64 / (sample_rate as f64)
 }
+
+
 
 pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
@@ -102,6 +136,8 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
             }
         }
 
+        test_context.close().await?;
+
         infos.push(InputDeviceInfo {
             device_id,
             label,
@@ -124,7 +160,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
 pub async fn build_webaudio_input_stream<D>(
     device_info: InputDeviceInfo,
     data_callback: D,
-) -> Result<web_sys::AudioContext, JsValue>
+) -> Result<WasmStream, JsValue>
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
@@ -142,14 +178,12 @@ pub async fn build_webaudio_input_stream<D>(
 pub async fn build_webaudio_input_stream_raw<D>(
     device_info: InputDeviceInfo,
     mut data_callback: D,
-) -> Result<web_sys::AudioContext, JsValue>
+) -> Result<WasmStream, JsValue>
     where
         D: FnMut(&[f32]) + Send + 'static
 {
 
     let ctx = web_sys::AudioContext::new()?;
-    // SAFETY: WASM is single-threaded, so Arc is safe even though AudioContext is not Send/Sync
-    #[allow(clippy::arc_with_non_send_sync)]
     let window = web_sys::window()
                         .ok_or_else(|| JsValue::from_str("window not available"))?;
     let navigator: Navigator = window.navigator();
@@ -265,5 +299,5 @@ pub async fn build_webaudio_input_stream_raw<D>(
         .expect("Failed to get port")
         .set_onmessage(Some(js_func));
 
-    Ok(ctx)
+    Ok(WasmStream::new(ctx))
 }
