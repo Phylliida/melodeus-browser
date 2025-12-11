@@ -22,17 +22,20 @@
 //! The optional third argument selects the internal echo-canceller sample rate (Hz). When
 //! omitted, the demo defaults to 48 kHz and transparently resamples the devices if needed.
 
+use futures::channel::mpsc;
+use futures::StreamExt;
+
 use std::{
-    thread,
     collections::{HashMap},
     error::Error,
     mem::{MaybeUninit},
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc::{self, TryRecvError, RecvError},
         Arc,
     },
 };
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::{spawn_local, JsFuture};
 use aec3::voip::VoipAec3;
 
 use std::backtrace::Backtrace;
@@ -47,6 +50,9 @@ use cpal::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use cpal::InputCallbackInfo;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 use cpal::SupportedBufferSize;
 use std::collections::HashSet;
@@ -64,7 +70,9 @@ use rustfft::num_complex::Complex32;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{UNIX_EPOCH, SystemTime};
 #[cfg(target_arch = "wasm32")]
-use js_sys::Date;
+use js_sys::{Date, Promise};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
 use hound::{SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
 
 use crate::cpal_webaudio_inputs::get_webaudio_input_devices;
@@ -112,6 +120,11 @@ fn now_micros() -> u128 {
         // Date::now returns milliseconds since epoch as f64.
         (Date::now() * 1000.0) as u128
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn yield_to_event_loop() {
+    let _ = JsFuture::from(Promise::resolve(&JsValue::NULL)).await;
 }
 
 /// Generate a short, Hann-windowed multi-tone probe at 16 kHz sample rate.
@@ -744,7 +757,7 @@ impl StreamAlignerProducer {
                 // calibrated
                 calibrated
             );
-            self.input_audio_buffer_metadata_producer.send(metadata)?;
+            self.input_audio_buffer_metadata_producer.try_send(metadata)?;
         }
         Ok(())
     }
@@ -855,10 +868,10 @@ impl StreamAlignerResampler {
         Ok((consumed, produced))
     }
 
-    fn resample(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+    async fn resample(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
         // process all recieved audio chunks
-        match self.input_audio_buffer_metadata_consumer.recv() {
-            Ok(msg) => match msg {
+        match self.input_audio_buffer_metadata_consumer.next().await {
+            Some(msg) => match msg {
                 AudioBufferMetadata::Arrive(num_available_frames, system_micros_after_packet_finishes, target_emitted_frames, calibrated) => {
                     let num_leftovers_from_prev = self.total_received_frames - self.total_processed_input_frames;
                     self.total_received_frames += num_available_frames as u128;
@@ -885,14 +898,14 @@ impl StreamAlignerResampler {
                     // will always be positive because it's relative to 1970
                     let system_micros_after_resampled_packet_finishes = (system_micros_after_packet_finishes as i128) - micros_earlier;
                     let system_micros_at_start_of_packet = (system_micros_after_resampled_packet_finishes as u128) - frames_to_micros(consumed_frames as u128, self.input_sample_rate as u128);
-                    self.finished_resampling_producer.send(ResamplingMetadata::Arrive(produced / self.channels, system_micros_at_start_of_packet, system_micros_after_resampled_packet_finishes as u128, calibrated))?;
+                    self.finished_resampling_producer.try_send(ResamplingMetadata::Arrive(produced / self.channels, system_micros_at_start_of_packet, system_micros_after_resampled_packet_finishes as u128, calibrated))?;
                     Ok(true)
                 },
                 AudioBufferMetadata::Teardown() => {
                     Ok(false)
                 }
             },
-            Err(RecvError) => Err("input metadata channel disconnected".into())   // sender dropped; bail out or log
+            None => Err("resample metadata channel disconnected".into())   // sender dropped; bail out or log
         }
     }
 }
@@ -926,11 +939,11 @@ impl StreamAlignerConsumer {
     // we allow some initial calibration time to synchronize the clocks
     // (it needs some extra time because packets can be delayed sometimes 
     // so waiting and min over a history lets us get better estimate)
-    fn is_ready_to_read(&mut self, micros_packet_finished: u128, size_in_frames: usize) -> bool {
+    async fn is_ready_to_read(&mut self, micros_packet_finished: u128, size_in_frames: usize) -> bool {
         // non blocking cause maybe it's just not ready (initialized) yet
         loop {
-            match self.finished_message_reciever.try_recv() {
-                Ok(msg) => {
+            match self.finished_message_reciever.try_next() {
+                Ok(Some(msg)) => {
                     match msg {
                         ResamplingMetadata::Arrive(frames_recieved, _system_micros_at_start_of_packet, _system_micros_after_packet_finishes, calibrated) => {
                             self.calibrated = calibrated;
@@ -940,12 +953,13 @@ impl StreamAlignerConsumer {
                         }
                     }
                 }
-                Err(TryRecvError::Empty) => {
-                    // no message available right now
+                // sender dropped; receiver will never get more messages
+                Ok(None) => {
+                    eprintln!("Error: Stream Aligner Consumer message send disconnected");
                     break;
                 }
-                Err(TryRecvError::Disconnected) => {
-                    // sender dropped; receiver will never get more messages
+                Err(_err) => {
+                    // no message available right now
                     break;
                 }
             }
@@ -962,7 +976,7 @@ impl StreamAlignerConsumer {
                     self.final_audio_buffer_consumer.finish_read((num_frames_that_are_behind_current_packet * self.channels as u128) as usize);
                     let additional_frames_needed = (size_in_frames as i128) - available_frames;
                     // we will be able to get all samples for this packet, block until we get them
-                    let (_read_success, _samples) = self.get_chunk_to_read((additional_frames_needed * self.channels as i128) as usize);
+                    let (_read_success, _samples) = self.get_chunk_to_read((additional_frames_needed * self.channels as i128) as usize).await;
                     println!("Finished calibrate, ignoring {num_frames_that_are_behind_current_packet} frames");
                     // return _read_success and not true to avoid failed reads clogging up the data
                     _read_success // we will read them again later, at which point we will do finish_read (this is delibrate reading them twice)
@@ -1012,15 +1026,18 @@ impl StreamAlignerConsumer {
     // waits until we have at least that much data
     // (or something errors)
     // returns (success, audio_buffer)
-    fn get_chunk_to_read(&mut self, size: usize) -> (bool, &[f32]) {
+    async fn get_chunk_to_read(&mut self, size: usize) -> (bool, &[f32]) {
         // drain anything in buffer (non blocking)
         loop {
-            match self.finished_message_reciever.try_recv() {
-                Ok(_msg) => {},
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    // sender dropped; receiver will never get more messages
-                    eprintln!("Error: StreamAlignerConsumer message send disconnected");
+            match self.finished_message_reciever.try_next() {
+                Ok(Some(_msg)) => {},
+                // sender dropped; receiver will never get more messages
+                Ok(None) => {
+                    eprintln!("Error: Stream Aligner Consumer message send disconnected");
+                    break;
+                }
+                Err(_err) => {
+                    // no message available right now
                     break;
                 }
             }
@@ -1028,13 +1045,13 @@ impl StreamAlignerConsumer {
 
         while self.final_audio_buffer_consumer.available() < size {
             // wait for data to arrive
-            match self.finished_message_reciever.recv() {
-                Ok(_data) => {
+            match self.finished_message_reciever.next().await {
+                Some(_data) => {
                     // this is only called after is_ready_to_read returns true (and is no longer used),
                     // so it's fine to ignore this, we don't use samples_recieved anymore
                 }
-                Err(err) => {
-                    eprintln!("channel closed: {err}");
+                None => {
+                    eprintln!("Stream aligner consumer closed closed");
                     return (false, &[])
                 }
             }
@@ -1049,16 +1066,19 @@ impl StreamAlignerConsumer {
 
 impl Drop for StreamAlignerConsumer {
     fn drop(&mut self) {
-        if let Err(err) = self.thread_message_sender.send(AudioBufferMetadata::Teardown()) {
+        if let Err(err) = self.thread_message_sender.try_send(AudioBufferMetadata::Teardown()) {
             eprintln!("failed to send shutdown signal: {}", err);
         }
     }
 }
 
+// some large constant is fine
+static CHANNEL_SIZE : usize = 10000;
+
 // make (producer (recieves audio data from device), resampler (resamples input audio to target rate), consumer (contains resampled data)) for input audio alignment
 fn create_stream_aligner(channels: usize, input_sample_rate: u32, output_sample_rate: u32, history_len: usize, calibration_packets: u32, audio_buffer_seconds: u32, resampler_quality: i32) -> Result<(StreamAlignerProducer, StreamAlignerResampler, StreamAlignerConsumer), Box<dyn Error>> {
     let (input_audio_buffer_producer, input_audio_buffer_consumer) = HeapRb::<f32>::new((audio_buffer_seconds * input_sample_rate * (channels as u32)) as usize).split();
-    let (input_audio_buffer_metadata_producer, input_audio_buffer_metadata_consumer) = mpsc::channel::<AudioBufferMetadata>();
+    let (input_audio_buffer_metadata_producer, input_audio_buffer_metadata_consumer) = mpsc::channel::<AudioBufferMetadata>(CHANNEL_SIZE);
     let additional_input_audio_buffer_metadata_producer = input_audio_buffer_metadata_producer.clone(); // make another one, this is ok because it is multiple producer single consumer 
     // this recieves data from audio buffer
     let producer = StreamAlignerProducer::new(
@@ -1071,7 +1091,7 @@ fn create_stream_aligner(channels: usize, input_sample_rate: u32, output_sample_
         input_audio_buffer_metadata_producer
     )?;
 
-    let (finished_resampling_producer, finished_resampling_consumer) = mpsc::channel::<ResamplingMetadata>();
+    let (finished_resampling_producer, finished_resampling_consumer) = mpsc::channel::<ResamplingMetadata>(CHANNEL_SIZE);
 
     let (output_audio_buffer_producer, output_audio_buffer_consumer) = HeapRb::<f32>::new((audio_buffer_seconds * output_sample_rate * (channels as u32)) as usize).split();
     // resampled_consumer: BufferedCircularConsumer::<f32>::new(resampled_consumer))
@@ -1098,6 +1118,38 @@ fn create_stream_aligner(channels: usize, input_sample_rate: u32, output_sample_
     );
 
     Ok((producer, resampler, consumer))
+}
+
+fn spawn_resampler_loop(mut resampler: StreamAlignerResampler) {
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            spawn_local(async move {
+                loop {
+                    match resampler.resample().await {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(err) => {
+                            eprintln!("resampler error: {err}");
+                            break;
+                        }
+                    }
+                }
+            });
+        } else {
+            thread::spawn(move || {
+                loop {
+                    match resampler.resample() {
+                        Ok(true) => continue,
+                        Ok(false) => break,
+                        Err(err) => {
+                            eprintln!("resampler error: {err}");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    }
 }
 
 type StreamId = u64;
@@ -1163,7 +1215,7 @@ impl OutputStreamAlignerProducer {
         }
     }
 
-    pub fn begin_audio_stream(&self, channels: usize, channel_map: HashMap<usize, Vec<usize>>, audio_buffer_seconds: u32, sample_rate: u32, resampler_quality: i32) -> Result<(StreamId, StreamProducer), Box<dyn Error>> {
+    pub fn begin_audio_stream(&mut self, channels: usize, channel_map: HashMap<usize, Vec<usize>>, audio_buffer_seconds: u32, sample_rate: u32, resampler_quality: i32) -> Result<(StreamId, StreamProducer), Box<dyn Error>> {
         // this assigns unique ids in a thread-safe way
         let stream_index = self.cur_stream_id.fetch_add(1, Ordering::Relaxed);
         let (producer, consumer) = HeapRb::<f32>::new((audio_buffer_seconds * sample_rate * (channels as u32)) as usize).split();
@@ -1179,17 +1231,17 @@ impl OutputStreamAlignerProducer {
             BufferedCircularProducer::<f32>::new(resampled_producer),
         )?;
 
-        self.output_stream_sender.send(OutputStreamMessage::Add(stream_index, sample_rate, channels, channel_map, resampled_producer, resampled_consumer))?;
+        self.output_stream_sender.try_send(OutputStreamMessage::Add(stream_index, sample_rate, channels, channel_map, resampled_producer, resampled_consumer))?;
         Ok((stream_index, StreamProducer::new(producer)))
     }
 
-    pub fn end_audio_stream(&self, stream_index: StreamId) -> Result<(), Box<dyn Error>> {
-        self.output_stream_sender.send(OutputStreamMessage::Remove(stream_index))?;
+    pub fn end_audio_stream(&mut self, stream_index: StreamId) -> Result<(), Box<dyn Error>> {
+        self.output_stream_sender.try_send(OutputStreamMessage::Remove(stream_index))?;
         Ok(())
     }
 
-    pub fn interrupt_all_streams(&self) -> Result<(), Box<dyn Error>> { 
-        self.output_stream_sender.send(OutputStreamMessage::InterruptAll())?;
+    pub fn interrupt_all_streams(&mut self) -> Result<(), Box<dyn Error>> { 
+        self.output_stream_sender.try_send(OutputStreamMessage::InterruptAll())?;
         Ok(())
     }
 }
@@ -1221,11 +1273,11 @@ impl OutputStreamAlignerMixer {
         })
     }
 
-    fn mix_audio_streams(&mut self, input_chunk_size: usize) -> Result<(), Box<dyn std::error::Error>> {
+    async fn mix_audio_streams(&mut self, input_chunk_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         // fetch new audio consumers, non-blocking
         loop {
-            match self.output_stream_receiver.try_recv() {
-                Ok(msg) => match msg {
+            match self.output_stream_receiver.try_next() {
+                Ok(Some(msg)) => match msg {
                     OutputStreamMessage::Add(id, input_sample_rate, channels, channel_map, resampled_producer, resampled_consumer) => {
                         println!("Got new output device {} with {} channels", id, channels);
                         self.stream_consumers.insert(id, (input_sample_rate, channels, channel_map, resampled_producer, BufferedCircularConsumer::new(resampled_consumer)));
@@ -1239,8 +1291,15 @@ impl OutputStreamAlignerMixer {
                         self.stream_consumers.clear();
                     }
                 },
-                Err(TryRecvError::Empty) => break,          // nothing waiting; continue processing
-                Err(TryRecvError::Disconnected) => break,   // sender dropped; bail out or log
+                // sender dropped; receiver will never get more messages
+                Ok(None) => {
+                    eprintln!("Error: Mix audio stream message disconnected");
+                    break;
+                }
+                Err(_err) => {
+                    // no message available right now
+                    break;
+                }
             }
         }
 
@@ -1465,7 +1524,7 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
     ).await?;
     
 
-    let (producer, mut resampler, consumer) = create_stream_aligner(
+    let (producer, resampler, consumer) = create_stream_aligner(
         device_config.channels,
         device_config.sample_rate,
         aec_config.target_sample_rate,
@@ -1474,20 +1533,7 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
         device_config.audio_buffer_seconds,
         device_config.resampler_quality)?;
 
-    // start the resampler thread
-    thread::spawn(move || {
-        // it returns true when signaled to stop (such as when consumer goes out of scope)
-        loop {
-            match resampler.resample() {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(err) => {
-                    eprintln!("resampler error: {err}");
-                    break;
-                }
-            }
-        }
-    });
+    spawn_resampler_loop(resampler);
 
     let stream = build_input_alignment_stream(
         &device,
@@ -1528,7 +1574,7 @@ fn get_output_stream_aligners(device_config: &OutputDeviceConfig, aec_config: &A
     )?;
 
     let (device_audio_producer, device_audio_consumer) = HeapRb::<f32>::new((device_config.audio_buffer_seconds * device_config.sample_rate * (device_config.channels as u32)) as usize).split();
-    let (output_stream_sender, output_stream_receiver) = mpsc::channel::<OutputStreamMessage>();
+    let (output_stream_sender, output_stream_receiver) = mpsc::channel::<OutputStreamMessage>(CHANNEL_SIZE);
 
     let output_producer = OutputStreamAlignerProducer::new(
         device_config.host_id,
@@ -1538,7 +1584,7 @@ fn get_output_stream_aligners(device_config: &OutputDeviceConfig, aec_config: &A
         output_stream_sender
     );
 
-    let (producer, mut resampler, consumer) = create_stream_aligner(
+    let (producer, resampler, consumer) = create_stream_aligner(
         device_config.channels,
         device_config.sample_rate,
         aec_config.target_sample_rate,
@@ -1558,20 +1604,7 @@ fn get_output_stream_aligners(device_config: &OutputDeviceConfig, aec_config: &A
     )?;
     
 
-    // start the resampler thread
-    thread::spawn(move || {
-        // it returns true when signaled to stop (such as when consumer goes out of scope)
-        loop {
-            match resampler.resample() {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(err) => {
-                    eprintln!("resampler error: {err}");
-                    break;
-                }
-            }
-        }
-    });
+    spawn_resampler_loop(resampler);
 
     let stream = build_output_alignment_stream(
         &device,
@@ -1626,7 +1659,7 @@ impl AecStream {
         if aec_config.target_sample_rate == 0 {
             return Err(format!("Target sample rate is {}, it must be greater than zero.", aec_config.target_sample_rate).into());
         }
-        let (device_update_sender, device_update_receiver) = mpsc::channel::<DeviceUpdateMessage>();
+        let (device_update_sender, device_update_receiver) = mpsc::channel::<DeviceUpdateMessage>(CHANNEL_SIZE);
         Ok(Self {
            //aec: None,
            aec_config: aec_config,
@@ -1727,28 +1760,28 @@ impl AecStream {
 
     pub async fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
         let (stream, aligners) = get_input_stream_aligners(config, &self.aec_config).await?;
-        self.device_update_sender.send(DeviceUpdateMessage::AddInputDevice(config.device_name.clone(), stream, aligners))?;
+        self.device_update_sender.try_send(DeviceUpdateMessage::AddInputDevice(config.device_name.clone(), stream, aligners))?;
         Ok(())
     }
 
     pub async fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
         let (stream, producer, consumer) = get_output_stream_aligners(config, &self.aec_config)?;
-        self.device_update_sender.send(DeviceUpdateMessage::AddOutputDevice(config.device_name.clone(), stream, consumer))?;
+        self.device_update_sender.try_send(DeviceUpdateMessage::AddOutputDevice(config.device_name.clone(), stream, consumer))?;
         Ok(producer)
     }
 
     pub fn remove_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
-        self.device_update_sender.send(DeviceUpdateMessage::RemoveInputDevice(config.device_name.clone()))?;
+        self.device_update_sender.try_send(DeviceUpdateMessage::RemoveInputDevice(config.device_name.clone()))?;
         Ok(())
     }
 
     pub fn remove_output_device(&mut self, config: &OutputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
-        self.device_update_sender.send(DeviceUpdateMessage::RemoveOutputDevice(config.device_name.clone()))?;
+        self.device_update_sender.try_send(DeviceUpdateMessage::RemoveOutputDevice(config.device_name.clone()))?;
         Ok(())
     }
 
-    pub fn calibrate(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(), Box<dyn std::error::Error>> {
-        let (output_offsets, input_offsets) = self.get_calibration_offsets(output_producers, debug_wav)?;
+    pub async fn calibrate(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let (output_offsets, input_offsets) = self.get_calibration_offsets(output_producers, debug_wav).await?;
         // we need to throw away some samples for each device until we are calibrated
         // each device will have an offset (could be negative)
         for input_index in 0..input_offsets.len() {
@@ -1771,7 +1804,7 @@ impl AecStream {
             if let Some(aligner) = self.input_aligners.get_mut(&self.sorted_input_aligners[input_index].clone()) {
                 // skip ahead that many samples (* num channels bc it is multi channel)
                 if shift_needed > 0 {
-                    let (_ok, chunk) = aligner.get_chunk_to_read((shift_needed as usize) * aligner.channels);
+                    let (_ok, chunk) = aligner.get_chunk_to_read((shift_needed as usize) * aligner.channels).await;
                     let chunk_len = chunk.len();
                     aligner.finish_read(chunk_len);
                 }
@@ -1780,7 +1813,7 @@ impl AecStream {
         Ok(())
     }
 
-    fn get_calibration_offsets(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(Vec<Option<i64>>, Vec<Vec<Option<i64>>>), Box<dyn std::error::Error>> {
+    async fn get_calibration_offsets(&mut self, output_producers: &mut [OutputStreamAlignerProducer], debug_wav: bool) -> Result<(Vec<Option<i64>>, Vec<Vec<Option<i64>>>), Box<dyn std::error::Error>> {
         let sample_rate = self.aec_config.target_sample_rate as u32;
         // Probe length (~0.1s) to stay quick but audible.
         let tone_ms = 100.0;
@@ -1851,7 +1884,7 @@ impl AecStream {
         let total_in_ch = self.input_channels.max(1);
         let total_out_ch = self.output_channels.max(1);
         while captured_micros < target_micros {
-            let (input_slices, output_slices, _aec_out, start_time, end_time) = self.update_debug()?;
+            let (input_slices, output_slices, _aec_out, start_time, end_time) = self.update_debug().await?;
             let chunk_micros = end_time.saturating_sub(start_time);
             if !input_slices.is_empty() && total_in_ch > 0 {
                 let frames = input_slices.len() / total_in_ch;
@@ -1886,7 +1919,7 @@ impl AecStream {
 
         // 3) Stop probe streams now that capture is done.
         for (idx, _channels, stream_id) in active_streams {
-            if let Some(producer) = output_producers.get(idx) {
+            if let Some(producer) = output_producers.get_mut(idx) {
                 producer.end_audio_stream(stream_id)?;
             }
         }
@@ -1982,15 +2015,15 @@ impl AecStream {
 
     // calls update, but returns all involved audio buffers
     // (if needed for diagnostic reasons, usually .update() (which returns aec'd inputs) should be all you need)
-    pub fn update_debug(&mut self) -> Result<(&[i16], &[i16], &[f32], u128, u128), Box<dyn std::error::Error>> {
+    pub async fn update_debug(&mut self) -> Result<(&[i16], &[i16], &[f32], u128, u128), Box<dyn std::error::Error>> {
         let (start_time, end_time) = {
-            let (_, start_time, end_time) = self.update()?;
+            let (_, start_time, end_time) = self.update().await?;
             (start_time, end_time)
         };
         return Ok((self.input_audio_buffer.as_slice(), self.output_audio_buffer.as_slice(), self.aec_out_audio_buffer.as_slice(), start_time, end_time));
     }
 
-    pub fn update(&mut self) -> Result<(&[f32], u128, u128), Box<dyn std::error::Error>> {
+    pub async fn update(&mut self) -> Result<(&[f32], u128, u128), Box<dyn std::error::Error>> {
         let chunk_size = self.aec_config.frame_size;
         let start_micros = if let Some(start_micros_value) = self.start_micros {
             start_micros_value
@@ -2006,8 +2039,8 @@ impl AecStream {
         // todo: move to crossbeam to avoid mpsc locks
         // todo: use actual timestamps on mac osx because they are system-wide (on linux they are device-wide so we have to do something else)
         loop {
-            match self.device_update_receiver.try_recv() {
-                Ok(msg) => match msg {
+            match self.device_update_receiver.try_next() {
+                Ok(Some(msg)) => match msg {
                     DeviceUpdateMessage::AddInputDevice(device_name, stream, aligner) => {
                         // old stream is stopped by default when it goes out of scope
                         self.input_streams.insert(device_name.clone(), stream);
@@ -2039,16 +2072,16 @@ impl AecStream {
                         self.reinitialize_aec()?;
                     }
                 }
-                Err(TryRecvError::Empty) => {
+                // sender dropped; receiver will never get more messages
+                Ok(None) => {
+                    eprintln!("Error: Aec stream update message send disconnected");
+                    break;
+                }
+                Err(_err) => {
                     // no message available right now
                     break;
                 }
-                Err(TryRecvError::Disconnected) => {
-                    // sender dropped; receiver will never get more messages
-                    eprintln!("Error: Stream message send disconnected");
-                    break;
-                }
-            } 
+            }
         }
         // similarly, if we initialize an output device here
         // we may not get any audio for a little bit
@@ -2058,12 +2091,10 @@ impl AecStream {
          // initialize any new aligners and align them to our frame step
         let mut modified_aligners = false;
         for key in self.input_aligners_in_progress.keys().cloned().collect::<Vec<String>>() {
-            let ready = self
-                .input_aligners_in_progress
-                .get_mut(&key)
-                .map(|a| a.is_ready_to_read(chunk_end_micros, chunk_size))
-                .unwrap_or(false);
-
+            let ready = match self.input_aligners_in_progress.get_mut(&key) {
+                Some(a) => a.is_ready_to_read(chunk_end_micros, chunk_size).await,
+                None => false,
+            };
             if ready {
                 if let Some(aligner) = self.input_aligners_in_progress.remove(&key) {
                     self.input_aligners.insert(key, aligner);
@@ -2072,12 +2103,10 @@ impl AecStream {
             }
         }
         for key in self.output_aligners_in_progress.keys().cloned().collect::<Vec<String>>() {
-            let ready = self
-                .output_aligners_in_progress
-                .get_mut(&key)
-                .map(|a| a.is_ready_to_read(chunk_end_micros, chunk_size))
-                .unwrap_or(false);
-
+            let ready = match self.output_aligners_in_progress.get_mut(&key) {
+                Some(a) => a.is_ready_to_read(chunk_end_micros, chunk_size).await,
+                None => false,
+            };
             if ready {
                 if let Some(aligner) = self.output_aligners_in_progress.remove(&key) {
                     self.output_aligners.insert(key, aligner);
@@ -2098,7 +2127,7 @@ impl AecStream {
             if let Some(aligner) = self.input_aligners.get_mut(key) {
                 let channels = aligner.channels;
                 let needed = chunk_size * channels;
-                let (ok, chunk) = aligner.get_chunk_to_read(needed);
+                let (ok, chunk) = aligner.get_chunk_to_read(needed).await;
                 let frames = chunk.len() / channels;
 
                 if ok && frames > 0 {
@@ -2130,7 +2159,7 @@ impl AecStream {
                 if let Some(aligner) = self.output_aligners.get_mut(key) {
                     let channels = aligner.channels;
                     let needed = chunk_size * channels;
-                    let (ok, chunk) = aligner.get_chunk_to_read(needed);
+                    let (ok, chunk) = aligner.get_chunk_to_read(needed).await;
                     let frames = chunk.len() / channels;
 
                     if ok && frames > 0 {

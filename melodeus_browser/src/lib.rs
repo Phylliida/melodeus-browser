@@ -179,7 +179,7 @@ pub async fn enable_aec(
 
     stream.add_input_device(&input_cfg).await.map_err(js_err)?;
     stream
-        .calibrate(output_producers.as_mut_slice(), false)
+        .calibrate(output_producers.as_mut_slice(), false).await
         .map_err(js_err)?;
 
     Ok(AecHandle {
@@ -192,11 +192,11 @@ pub async fn enable_aec(
 
 #[wasm_bindgen]
 impl AecHandle {
-    pub fn update(&mut self) -> Result<JsValue, JsValue> {
+    pub async fn update(&mut self) -> Result<JsValue, JsValue> {
         let input_channels = self.stream.num_input_channels();
         let output_channels = self.stream.num_output_channels();
         let (inputs_i16, outputs_i16, aec_out, start_micros, end_micros) =
-            self.stream.update_debug().map_err(js_err)?;
+            self.stream.update_debug().await.map_err(js_err)?;
 
         let inputs = normalize_i16(inputs_i16);
         let outputs = normalize_i16(outputs_i16);

@@ -146,10 +146,10 @@ import("./pkg").then(({ list_devices, enable_aec }) => {
     drawWaveform(aecCanvas, collapseChannels(aec, inputChannels || 1));
   };
 
-  const step = () => {
+  const step = async () => {
     if (!handle) return;
     try {
-      const frame = handle.update();
+      const frame = await handle.update();
       render(frame);
       setStatus("");
     } catch (err) {
