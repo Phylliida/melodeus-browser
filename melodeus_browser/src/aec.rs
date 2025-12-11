@@ -1434,7 +1434,7 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
     ).await?;
 
     let supported_config = find_matching_input_device_config(
-        &device,
+        &devicec,
         &device_config.device_name,
         device_config.channels,
         device_config.sample_rate,

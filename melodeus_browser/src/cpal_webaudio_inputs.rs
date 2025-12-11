@@ -11,7 +11,6 @@ use web_sys::{AudioContext, AudioContextOptions, MediaStream, MediaStreamTrack, 
 use js_sys::{Float32Array};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
 
 
 /// Discovered details for a specific audio input device obtained via `getUserMedia` constraints.
@@ -25,32 +24,63 @@ pub struct InputDeviceInfo {
 
 
 struct WasmStream {
-    audio_context: web_sys::AudioContext,
+    audio_context: Option<web_sys::AudioContext>,
 }
 
 impl WasmStream {
     fn new(audio_context : web_sys::AudioContext) -> Self {
         Self {
-            audio_context: audio_context
+            audio_context: Some(audio_context)
         }
     }
 
-    async fn play(&self) -> Result<(), Box<dyn Error>> {
-        self.audio_context.resume().await?;
+    async fn play(&self) -> Result<(), JsErr> {
+        if let Some(audio_context) = &self.audio_context {
+            JsFuture::from(audio_context.resume()?).await;
+        }
         Ok(())
     }
 
-    async fn pause(&self) -> Result<(), Box<dyn Error>> {
-        self.audio_context.suspend().await?;
+    async fn pause(&self) -> Result<(), JsErr> {
+        if let Some(audio_context) = &self.audio_context {
+            JsFuture::from(audio_context.suspend()?).await;
+        }
         Ok(())
+    }
+}
+
+// lets us auto convert JsValue to Error
+#[derive(Debug, thiserror::Error)]
+pub enum JsErr {
+    #[error("js error: {0}")]
+    Js(String),
+}
+
+impl From<JsValue> for JsErr {
+    fn from(v: JsValue) -> Self {
+        JsErr::Js(
+            v.as_string()
+            .or_else(|| js_sys::Error::from(v.clone()).message().as_string())
+            .unwrap_or_else(|| format!("{v:?}"))
+        )
     }
 }
 
 impl Drop for WasmStream {
     fn drop(&mut self) {
-        wasm_bindgen_futures::spawn_local(async move { 
-            self.audio_context.close().await;
-        });
+        if let Some(ctx) = self.audio_context.take() {
+            wasm_bindgen_futures::spawn_local(async move { 
+                match ctx.close() {
+                    Ok(val) => {
+                        JsFuture::from(val).await;
+                    }
+                    Err(err) => {
+                        let error_error = JsErr::from(err);
+                        eprintln!("Cleanup wasm stream failed: {error_error}");
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -105,7 +135,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
             .filter(|l| !l.is_empty());
 
         // Probe the specific device so we can grab its channel count and sample rate.
-        let mut constraints = MediaStreamConstraints::new();
+        let constraints = MediaStreamConstraints::new();
         constraints.set_video(&JsValue::from_bool(false));
 
         let audio_obj = js_sys::Object::new();
@@ -136,7 +166,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
             }
         }
 
-        test_context.close().await?;
+        JsFuture::from(test_context.close()?).await;
 
         infos.push(InputDeviceInfo {
             device_id,
@@ -164,7 +194,7 @@ pub async fn build_webaudio_input_stream<D>(
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
-    Ok(build_input_stream_raw(device_info, data_callback).await?)
+    Ok(build_webaudio_input_stream_raw(device_info, data_callback).await?)
     
     
     //.map_err(
@@ -214,7 +244,7 @@ pub async fn build_webaudio_input_stream_raw<D>(
     let source = ctx.create_media_stream_source(&stream)?;
 
     // must be fetched after call to create_media_stream_source (before that, it will not be populated)
-    let sample_rate = ctx.sample_rate() as u32;
+    let _sample_rate = ctx.sample_rate() as u32;
 
     let processor_js_code = r#"
         class CpalInputProcessor extends AudioWorkletProcessor {
