@@ -9,7 +9,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioContext, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag};
 use js_sys::{Float32Array};
-
+use cpal::SampleFormat;
 
 /// Discovered details for a specific audio input device obtained via `getUserMedia` constraints.
 #[derive(Clone, Debug)]
@@ -18,6 +18,7 @@ pub struct InputDeviceInfo {
     pub label: Option<String>,
     pub sample_rate: u32,
     pub channels: usize,
+    pub sample_format: cpal::SampleFormat,
 }
 
 
@@ -166,11 +167,14 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValu
 
         JsFuture::from(test_context.close()?).await;
 
+        let sample_format = SampleFormat::F32;
+
         infos.push(InputDeviceInfo {
             device_id,
             label,
             sample_rate,
             channels,
+            sample_format, // wasm is always f32 sample format
         });
     }
 

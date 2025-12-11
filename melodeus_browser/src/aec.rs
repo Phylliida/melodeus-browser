@@ -1266,6 +1266,7 @@ impl OutputStreamAlignerMixer {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct InputDeviceConfig {
     host_id: cpal::HostId,
     device_name: String,
@@ -1309,7 +1310,7 @@ impl InputDeviceConfig {
     }
 
     /// Build a config using the device's default input settings plus caller-provided buffer/resampler tuning.
-    fn from_default(
+    async fn from_default(
         host_id: cpal::HostId,
         device_name: String,
         history_len: usize,
@@ -1317,13 +1318,11 @@ impl InputDeviceConfig {
         audio_buffer_seconds: u32,
         resampler_quality: i32,
     ) -> Result<Self, Box<dyn Error>> {
-        let host = cpal::host_from_id(host_id)?;
-        let input_device = select_device(host.input_devices(), &device_name, "Input")?;
-        let default_config = input_device.default_input_config()?;
+        let default_config = get_default_input_device_config(&host_id, &device_name).await?;
 
         Ok(Self::new(
             host_id,
-            input_device.name()?,
+            device_name,
             default_config.channels() as usize,
             default_config.sample_rate().0,
             default_config.sample_format(),
@@ -1335,6 +1334,7 @@ impl InputDeviceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OutputDeviceConfig {
     host_id: cpal::HostId,
     device_name: String,
@@ -1384,7 +1384,7 @@ impl OutputDeviceConfig {
     }
 
     /// Build a config using the device's default output settings plus caller-provided buffer/resampler tuning.
-    fn from_default(
+    async fn from_default(
         host_id: cpal::HostId,
         device_name: String,
         history_len: usize,
@@ -1631,6 +1631,30 @@ impl AecStream {
            aec2: None,
            aec3: None,
         })
+    }
+
+    fn get_device_configs(&self) -> 
+
+    fn get_available_device_configs(&self) -> Vec<Vec<InputDeviceConfig>> {
+        let host_ids = cpal::available_hosts();
+        for host_id in host_ids {
+            let host = cpal::host_from_id(host_id)?;
+
+            for dev in host.input_devices()? {
+                println!("  input: '{}'", dev.name()?);
+                match supported_device_configs_to_string(&dev, &dev.name()?, "Input") {
+                    Ok(cfgs) => println!("      {cfgs}"),
+                    Err(err) => println!("      {err}"),
+                }
+            }
+            for dev in host.output_devices()? {
+                println!("  output: '{}'", dev.name()?);
+                match supported_device_configs_to_string(&dev, &dev.name()?, "Output") {
+                    Ok(cfgs) => println!("      {cfgs}"),
+                    Err(err) => println!("      {err}"),
+                }
+            }
+        }
     }
 
     fn num_input_channels(&self) -> usize {
@@ -2202,6 +2226,37 @@ impl AecStream {
 }
     
 
+
+async fn get_supported_output_configs(
+    history_len: usize,
+    num_calibration_packets: u32,
+    audio_buffer_seconds: u32,
+    resampler_quality: i32) -> Result<Vec<Vec<OutputDeviceConfig>>, Box<dyn std::error::Error>>  {
+    let configs = Vec::new();
+    // need to use these wrappers to ensure wasm is treated properly
+    for host_id in cpal::available_hosts() {
+        for output_device_name in get_output_device_names(&host_id).await? {
+            configs.push(get_supported_output_device_configs(&host_id, &output_device_name, num_calibration_packets, audio_buffer_seconds, resampler_quality).await?);
+        }
+    }
+    configs
+}
+
+async fn get_supported_input_configs(
+    history_len: usize,
+    num_calibration_packets: u32,
+    audio_buffer_seconds: u32,
+    resampler_quality: i32) -> Result<Vec<Vec<InputDeviceConfig>>, Box<dyn std::error::Error>> {
+    let configs = Vec::new();
+    // need to use these wrappers to ensure wasm is treated properly
+    for host_id in cpal::available_hosts() {
+        for input_device_name in get_input_device_names(&host_id).await? {
+            configs.push(get_supported_input_device_configs(&host_id, &input_device_name, history_len, num_calibration_packets, audio_buffer_seconds, resampler_quality).await?);
+        }
+    }
+    configs
+}
+
 fn get_host_by_name(target: &str) -> Option<Host> {
     for host_id in cpal::available_hosts() {
         if host_id.name().eq_ignore_ascii_case(target) {
@@ -2250,11 +2305,11 @@ async fn select_input_device(
                 .collect::<Vec<_>>()
                 .join(", ");
             Err(format!(
-                "{kind} device matching '{target}' not found. Available: {quoted}"
+                "Input device matching '{target}' not found. Available: {quoted}"
             )
             .into())
         }
-        Err(err) => Err(format!("Failed to enumerate {kind} devices: {err}").into()),
+        Err(err) => Err(format!("Failed to enumerate input devices: {err}").into()),
     }
 }
 
@@ -2292,6 +2347,191 @@ where
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
+    match get_webaudio_input_devices().await {
+        Ok(device_iter) => {
+            let mut available = Vec::new();
+
+            for device in device_iter {
+                let name = device.device_id;
+                available.push(name.clone());
+            }
+            // don't sort since the order matters, first is default
+            Ok(available)
+        }
+        Err(err) => Err(format!("Failed to enumerate input devices: {err}").into()),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
+    let host = cpal::host_from_id(host_id)?;
+    let available = Vec::new();
+    for dev in host.input_devices()? {
+        available.push(dev.name()?.clone());
+    }
+    Ok(available)
+}
+
+async fn get_output_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
+    let host = cpal::host_from_id(host_id)?;
+    let available = Vec::new();
+    for dev in host.output_devices()? {
+        available.push(dev.name()?.clone());
+    }
+    Ok(available)
+}
+
+
+let COMMON_SAMPLE_RATES = [5512, 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 128000, 176400, 192000, 256000, 352800, 384000, 705600, 768000];
+
+fn get_sample_rates_in_range(min_rate: u32, max_rate: u32) {
+    let mut rates = HashSet::new();
+    rates.insert(min_rate);
+    rates.insert(max_rate);
+
+    for rate in COMMON_SAMPLE_RATES {
+        if rate >= min_rate && rate <= max_rate {
+            rates.insert(rate);
+        }
+    }
+    
+    let mut list: Vec<u32> = rates.into_iter().collect();
+    list.sort_unstable();
+    Ok(list)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn get_supported_input_device_configs(
+    host_id: &cpal::HostId,
+    device_name: &String,
+    history_len: usize,
+    num_calibration_packets: u32,
+    audio_buffer_seconds: u32,
+    resampler_quality: i32) -> Result<Vec<InputDeviceConfig>, Box<dyn Error>> {
+
+    // wasm only has one
+    let default_config = InputDeviceConfig::from_default(
+        host_id,
+        device_name,
+        // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
+        history_len, // history_len 
+        // number of packets recieved before we start getting audio data
+        // a larger value here will take longer to connect, but result in more accurate timing alignments
+        num_calibration_packets, // calibration_packets
+        // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
+        audio_buffer_seconds, // audio_buffer_seconds
+        resampler_quality // resampler_quality
+    ).await?;
+
+    let result_configs = Vec::new();
+    result_configs.push(default_config);
+    reuslt_configs
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn get_supported_input_device_configs(
+    host_id: &cpal::HostId,
+    device_name: &String,
+    history_len: usize,
+    num_calibration_packets: u32,
+    audio_buffer_seconds: u32,
+    resampler_quality: i32,
+) -> Result<Vec<InputDeviceConfig>, Box<dyn Error>> {
+    // put default as first item in list
+    let default_config = InputDeviceConfig::from_default(
+        host_id,
+        device_name,
+        // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
+        history_len, // history_len 
+        // number of packets recieved before we start getting audio data
+        // a larger value here will take longer to connect, but result in more accurate timing alignments
+        num_calibration_packets, // calibration_packets
+        // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
+        audio_buffer_seconds, // audio_buffer_seconds
+        resampler_quality // resampler_quality
+    ).await?;
+
+    let result_configs = Vec::new();
+    result_configs.push(default_config);
+
+    let configs : Vec<_> = device.supported_input_configs().map(|configs| configs.collect())
+            .map_err(|err| format!("Unable to enumerate input configs for '{device_name}': {err}"))?;
+
+    for cfg in configs {
+        let min_rate = cfg.min_sample_rate().0;
+        let max_rate = cfg.max_sample_rate().0;
+        for sample_rate in get_sample_rates_in_range(min_rate, max_rate) {
+            let device_config = InputDeviceConfig::new(
+                host_id,
+                device_name.clone(),
+                cfg.channels(),
+                sample_rate,
+                cfg.sample_format(),
+                history_len,
+                calibration_packets,
+                audio_buffer_seconds,
+                resampler_quality);
+            if device_config != default_config {
+                result_configs.push(device_config);
+            }
+        }
+    }
+    result_configs
+}
+
+
+async fn get_supported_output_device_configs(
+    host_id: &cpal::HostId,
+    device_name: &String,
+    history_len: usize,
+    num_calibration_packets: u32,
+    audio_buffer_seconds: u32,
+    resampler_quality: i32,
+) -> Result<Vec<OutputDeviceConfig>, Box<dyn Error>> {
+    // put default as first item in list
+    let default_config = OutputDeviceConfig::from_default(
+        host_id,
+        device_name,
+        // number of audio chunks to hold in memory, for aligning input devices's values when dropped frames/clock offsets. 100 or so is fine
+        history_len, // history_len 
+        // number of packets recieved before we start getting audio data
+        // a larger value here will take longer to connect, but result in more accurate timing alignments
+        num_calibration_packets, // calibration_packets
+        // how long buffer of input audio to store, should only really need a few seconds as things are mostly streamed
+        audio_buffer_seconds, // audio_buffer_seconds
+        resampler_quality // resampler_quality
+    ).await?;
+
+    let result_configs = Vec::new();
+    result_configs.push(default_config);
+
+    let configs : Vec<_> = device.supported_output_configs().map(|configs| configs.collect())
+            .map_err(|err| format!("Unable to enumerate output configs for '{device_name}': {err}"))?;
+
+    for cfg in configs {
+        let min_rate = cfg.min_sample_rate().0;
+        let max_rate = cfg.max_sample_rate().0;
+        for sample_rate in get_sample_rates_in_range(min_rate, max_rate) {
+            let device_config = OutputDeviceConfig::new(
+                host_id,
+                device_name.clone(),
+                cfg.channels(),
+                sample_rate,
+                cfg.sample_format(),
+                history_len,
+                calibration_packets,
+                audio_buffer_seconds,
+                resampler_quality);
+            if device_config != default_config {
+                result_configs.push(device_config);
+            }
+        }
+    }
+    result_configs
+}
+
 fn supported_device_configs_to_string(
     device: &Device,
     device_name: &String,
@@ -2325,6 +2565,32 @@ fn supported_device_configs_to_string(
         })
         .collect::<Vec<_>>()
         .join("\n      "))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn get_default_input_device_config(host_id: &cpal::HostId, device_name: &String) -> Result<SupportedStreamConfig, Box<dyn Error>> {
+    let device = select_input_device(
+        &host_id,
+        &device_config.device_name
+    ).await?;
+
+    // it stores the defaults in the device itself, for wasm
+    Ok(SupportedStreamConfig::new(
+        device.channels,
+        SampleRate(device.sample_rate),
+        SupportedBufferSize::Default,
+        device.sample_format,
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn get_default_input_device_config(host_id: &cpal::HostId, device_name: &String) -> Result<SupportedStreamConfig, Box<dyn Error>> {
+    let device = select_input_device(
+        &host_id,
+        &device_config.device_name
+    ).await?;
+
+    device.default_input_config()?
 }
 
 #[cfg(target_arch = "wasm32")]

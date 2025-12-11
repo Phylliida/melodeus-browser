@@ -194,6 +194,8 @@ pub fn beep_with_output_device(device_name: Option<String>) -> Result<Handle, Js
 pub async fn get_audio_devices() -> Result<JsValue, JsValue> {
     let host = cpal::default_host();
 
+    let request = cpal_webaudio_inputs::request_input_access().await;
+
     let input_infos = cpal_webaudio_inputs::get_input_devices().await?;
     let inputs: Vec<String> = input_infos
         .iter()
