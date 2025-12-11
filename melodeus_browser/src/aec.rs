@@ -41,11 +41,14 @@ use rustfft::{FftPlanner, num_complex::Complex};
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, FromSample, Host, InputCallbackInfo, Sample, SampleFormat, SampleRate, SizedSample,
+    Device, FromSample, Host, Sample, SampleFormat, SampleRate, SizedSample,
     Stream, SupportedStreamConfig,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use cpal::InputCallbackInfo;
+
 use cpal::SupportedBufferSize;
-use cpal::BufferSize;
 use std::collections::HashSet;
 
 use ringbuf::{
@@ -59,7 +62,7 @@ use std::f32::consts::PI;
 use rustfft::num_complex::Complex32;
 
 use std::time::{UNIX_EPOCH, SystemTime};
-use hound::{WavReader,SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
+use hound::{SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
 
 use crate::cpal_webaudio_inputs::get_webaudio_input_devices;
 use crate::cpal_webaudio_inputs::InputDeviceInfo;
@@ -202,7 +205,7 @@ fn detect_probe_tones(input_mono: &[f32], num_devices: usize, duration_ms: f32, 
         // Pad probe to match captured length for GCC-PHAT.
         let mut probe_padded = vec![0.0f32; input_mono.len()];
         probe_padded[..probe.len()].copy_from_slice(&probe);
-        let margin = input_mono.len().saturating_sub(1);
+        let _margin = input_mono.len().saturating_sub(1);
         let lag = gcc_phat_delay(&input_mono, &probe_padded);
             // positive lag means probe leads capture; lag is the start index in the capture
         println!("Got lag {lag}");
@@ -362,7 +365,7 @@ fn gcc_phat_delay_old(siga: &[f32], sigb: &[f32], margin: usize) -> Option<(i64,
     fft_inv.process(&mut a);
 
     let scale = 1.0 / (n_fft as f32);
-    let mut corr: Vec<f32> = a.iter().map(|c| c.re * scale).collect();
+    let corr: Vec<f32> = a.iter().map(|c| c.re * scale).collect();
 
     // fftshift so zero-lag is centered
     let mut shifted = vec![0.0f32; n_fft];
@@ -1193,7 +1196,7 @@ struct OutputStreamAlignerMixer {
 
 // allows for playing audio on top of each other (mixing) or just appending to buffer
 impl OutputStreamAlignerMixer {
-    fn new(channels: usize, device_sample_rate: u32, output_sample_rate: u32, audio_buffer_seconds: u32, resampler_quality: i32, frame_size: u32, output_stream_receiver:  mpsc::Receiver<OutputStreamMessage>, device_audio_producer: HeapProd<f32>, resampled_audio_buffer_producer: StreamAlignerProducer) -> Result<Self, Box<dyn Error>>  {
+    fn new(channels: usize, device_sample_rate: u32, output_sample_rate: u32, frame_size: u32, output_stream_receiver:  mpsc::Receiver<OutputStreamMessage>, device_audio_producer: HeapProd<f32>, resampled_audio_buffer_producer: StreamAlignerProducer) -> Result<Self, Box<dyn Error>>  {
         // used to send across threads
         Ok(Self {
             channels: channels,
@@ -1537,8 +1540,6 @@ fn get_output_stream_aligners(device_config: &OutputDeviceConfig, aec_config: &A
         device_config.channels,
         device_config.sample_rate,
         aec_config.target_sample_rate,
-        device_config.audio_buffer_seconds,
-        device_config.resampler_quality,
         device_config.frame_size,
         output_stream_receiver,
         device_audio_producer,
@@ -1759,7 +1760,7 @@ impl AecStream {
             if let Some(aligner) = self.input_aligners.get_mut(&self.sorted_input_aligners[input_index].clone()) {
                 // skip ahead that many samples (* num channels bc it is multi channel)
                 if shift_needed > 0 {
-                    let (ok, chunk) = aligner.get_chunk_to_read((shift_needed as usize) * aligner.channels);
+                    let (_ok, chunk) = aligner.get_chunk_to_read((shift_needed as usize) * aligner.channels);
                     let chunk_len = chunk.len();
                     aligner.finish_read(chunk_len);
                 }
@@ -1944,7 +1945,6 @@ impl AecStream {
             }
             for (input_idx, buf) in captured_inputs.iter().enumerate() {
                 let detections = detect_probe_tones(buf, output_producers.len(), tone_ms, sample_rate);
-                let mut start_for_dev: Option<(i64, f32)> = None;
                 for (output_idx, start, score) in detections {
                     let in_seconds = (start as f32) / (sample_rate as f32);
                     println!("Output {output_idx} -> Input {input_idx} has offset {start} {in_seconds} with score {score}");
@@ -2093,7 +2093,7 @@ impl AecStream {
                     for c in 0..channels {
                         let mut src_idx = c;
                         let mut dst = input_channel + c;
-                        for i in 0..frames {
+                        for _ in 0..frames {
                             self.input_audio_buffer[dst] = Self::f32_to_i16(chunk[src_idx]);
                             dst += self.input_channels;
                             src_idx += channels;
@@ -2125,7 +2125,7 @@ impl AecStream {
                         for c in 0..channels {
                             let mut src_idx = c;
                             let mut dst = output_channel + c;
-                            for i in 0..frames {
+                            for _ in 0..frames {
                                 self.output_audio_buffer[dst] = Self::f32_to_i16(chunk[src_idx]);
                                 dst += self.output_channels;
                                 src_idx += channels;
@@ -2151,7 +2151,7 @@ impl AecStream {
                 // skip ahead if no output, as there's nothing to cancel
                 // this helps avoid needing to recalibrate every time we recieve audio
                 let output_energy = Self::energy(&self.output_audio_buffer);
-                let input_energy = Self::energy(&self.input_audio_buffer);
+                let _input_energy = Self::energy(&self.input_audio_buffer);
                 if output_energy < 0.003 {
                     println!("skipping with energy {output_energy}");
                     self.aec_audio_buffer.copy_from_slice(&self.input_audio_buffer);
@@ -2170,7 +2170,7 @@ impl AecStream {
                     for i in 0..output_audio_tmp.len() {
                         output_audio_tmp[i] = f32::from_sample(self.output_audio_buffer[i]);
                     }
-                    let metrics = aec3_value.process(&input_audio_tmp, Some(&output_audio_tmp), false, &mut aec_audio_tmp)?;
+                    let _metrics = aec3_value.process(&input_audio_tmp, Some(&output_audio_tmp), false, &mut aec_audio_tmp)?;
 
                     for i in 0..aec_audio_tmp.len() {
                         self.aec_audio_buffer[i] = i16::from_sample(aec_audio_tmp[i]);
@@ -2273,7 +2273,7 @@ async fn select_input_device(
 
 #[cfg(target_arch = "wasm32")]
 async fn select_input_device(
-    host_id: &cpal::HostId,
+    _host_id: &cpal::HostId,
     device_name: &str
 ) -> Result<InputDevice, Box<dyn Error>>
 {
@@ -2339,7 +2339,7 @@ where
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn get_input_device_names(host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
+async fn get_input_device_names(_host_id: &cpal::HostId) -> Result<Vec<String>, Box<dyn Error>> {
     match get_webaudio_input_devices().await {
         Ok(device_iter) => {
             let mut available = Vec::new();
@@ -2779,7 +2779,7 @@ where
 async fn build_input_alignment_stream_typed<T>(
     device: &InputDevice,
     config: &InputDeviceConfig,
-    supported_config: SupportedStreamConfig,
+    _supported_config: SupportedStreamConfig,
     mut channel_aligner: StreamAlignerProducer,
 ) -> Result<InputStream, Box<dyn Error>>
 where

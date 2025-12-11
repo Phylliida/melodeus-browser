@@ -90,7 +90,7 @@ pub mod struct_FILE_h {
 }
 pub mod fftwrap_h {
     use super::arch_h::spx_word16_t;
-    extern "C" {
+    unsafe extern "C" {
         pub fn spx_fft_init(size: std::ffi::c_int) -> *mut std::ffi::c_void;
         pub fn spx_fft_destroy(table: *mut std::ffi::c_void);
         pub fn spx_fft(
@@ -107,7 +107,7 @@ pub mod fftwrap_h {
 }
 pub mod stdio_h {
     use super::FILE_h::FILE;
-    extern "C" {
+    unsafe extern "C" {
         pub static mut stderr: *mut FILE;
         pub fn fprintf(
             __stream: *mut FILE,
@@ -118,7 +118,7 @@ pub mod stdio_h {
 }
 pub mod stdlib_h {
     use super::stddef_h::size_t;
-    extern "C" {
+    unsafe extern "C" {
         pub fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
         pub fn free(__ptr: *mut std::ffi::c_void);
     }
@@ -164,7 +164,7 @@ pub mod math_h {
     pub const M_PI: std::ffi::c_double = unsafe { 3.14159265358979323846f64 };
 }
 pub mod mathcalls_h {
-    extern "C" {
+    unsafe extern "C" {
         pub fn cos(__x: std::ffi::c_double) -> std::ffi::c_double;
         pub fn exp(__x: std::ffi::c_double) -> std::ffi::c_double;
         pub fn sqrt(__x: std::ffi::c_double) -> std::ffi::c_double;
@@ -495,7 +495,7 @@ unsafe extern "C" fn mdf_adjust_prop(
         i += 1;
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_state_init(
     frame_size: std::ffi::c_int,
     filter_length: std::ffi::c_int,
@@ -507,7 +507,7 @@ pub unsafe extern "C" fn speex_echo_state_init(
         1 as std::ffi::c_int,
     );
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_state_init_mc(
     frame_size: std::ffi::c_int,
     filter_length: std::ffi::c_int,
@@ -734,7 +734,7 @@ pub unsafe extern "C" fn speex_echo_state_init_mc(
     (*st).play_buf_started = 0 as std::ffi::c_int;
     return st;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_state_reset(st: *mut SpeexEchoState) {
     let mut i: std::ffi::c_int = 0;
     let mut M: std::ffi::c_int = 0;
@@ -819,7 +819,7 @@ pub unsafe extern "C" fn speex_echo_state_reset(st: *mut SpeexEchoState) {
     (*st).play_buf_pos = PLAYBACK_DELAY * (*st).frame_size;
     (*st).play_buf_started = 0 as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_state_destroy(st: *mut SpeexEchoState) {
     spx_fft_destroy((*st).fft_table);
     speex_free((*st).e as *mut std::ffi::c_void);
@@ -850,7 +850,7 @@ pub unsafe extern "C" fn speex_echo_state_destroy(st: *mut SpeexEchoState) {
     speex_free((*st).play_buf as *mut std::ffi::c_void);
     speex_free(st as *mut std::ffi::c_void);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_capture(
     st: *mut SpeexEchoState,
     rec: *const spx_int16_t,
@@ -886,7 +886,7 @@ pub unsafe extern "C" fn speex_echo_capture(
         }
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_playback(
     st: *mut SpeexEchoState,
     play: *const spx_int16_t,
@@ -928,7 +928,7 @@ pub unsafe extern "C" fn speex_echo_playback(
         );
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_cancel(
     st: *mut SpeexEchoState,
     in_0: *const spx_int16_t,
@@ -938,7 +938,7 @@ pub unsafe extern "C" fn speex_echo_cancel(
 ) {
     speex_echo_cancellation(st, in_0, far_end, out);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_cancellation(
     st: *mut SpeexEchoState,
     in_0: *const spx_int16_t,
@@ -1564,7 +1564,7 @@ pub unsafe extern "C" fn speex_echo_cancellation(
         }
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_get_residual(
     st: *mut SpeexEchoState,
     residual_echo: *mut spx_word32_t,
@@ -1594,7 +1594,7 @@ pub unsafe extern "C" fn speex_echo_get_residual(
         i += 1;
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_echo_ctl(
     st: *mut SpeexEchoState,
     request: std::ffi::c_int,

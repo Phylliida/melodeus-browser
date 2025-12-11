@@ -18,7 +18,7 @@ pub struct _IO_marker {
     _unused: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
     fn exit(__status: std::ffi::c_int) -> !;
     fn cos(__x: std::ffi::c_double) -> std::ffi::c_double;
@@ -764,7 +764,7 @@ unsafe extern "C" fn kf_factor(
         }
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kiss_fft_alloc(
     nfft: std::ffi::c_int,
     inverse_fft: std::ffi::c_int,
@@ -808,7 +808,7 @@ pub unsafe extern "C" fn kiss_fft_alloc(
     }
     return st;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kiss_fft_stride(
     st: kiss_fft_cfg,
     fin: *const kiss_fft_cpx,
@@ -837,7 +837,7 @@ pub unsafe extern "C" fn kiss_fft_stride(
         );
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kiss_fft(
     cfg: kiss_fft_cfg,
     fin: *const kiss_fft_cpx,

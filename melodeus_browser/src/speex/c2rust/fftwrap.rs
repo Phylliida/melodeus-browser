@@ -16,7 +16,7 @@ pub struct _IO_marker {
     _unused: [u8; 0],
 }
 
-extern "C" {
+unsafe extern "C" {
     static mut stderr: *mut FILE;
     fn fprintf(
         __stream: *mut FILE,
@@ -87,7 +87,7 @@ unsafe extern "C" fn speex_free(ptr: *mut std::ffi::c_void) {
 unsafe extern "C" fn speex_warning(str: *const std::ffi::c_char) {
     fprintf(stderr, b"warning: %s\n\0" as *const u8 as *const std::ffi::c_char, str);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_fft_init(
     size: std::ffi::c_int,
 ) -> *mut std::ffi::c_void {
@@ -97,12 +97,12 @@ pub unsafe extern "C" fn spx_fft_init(
     spx_drft_init(table, size);
     return table as *mut std::ffi::c_void;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_fft_destroy(table: *mut std::ffi::c_void) {
     spx_drft_clear(table as *mut drft_lookup);
     speex_free(table);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_fft(
     table: *mut std::ffi::c_void,
     in_0: *mut std::ffi::c_float,
@@ -134,7 +134,7 @@ pub unsafe extern "C" fn spx_fft(
     }
     spx_drft_forward(table as *mut drft_lookup, out);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_ifft(
     table: *mut std::ffi::c_void,
     in_0: *mut std::ffi::c_float,
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn spx_ifft(
     }
     spx_drft_backward(table as *mut drft_lookup, out);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_fft_float(
     table: *mut std::ffi::c_void,
     in_0: *mut std::ffi::c_float,
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn spx_fft_float(
 ) {
     spx_fft(table, in_0, out);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_ifft_float(
     table: *mut std::ffi::c_void,
     in_0: *mut std::ffi::c_float,

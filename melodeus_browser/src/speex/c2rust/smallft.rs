@@ -1,7 +1,7 @@
 #![allow(unused_assignments)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-extern "C" {
+unsafe extern "C" {
     fn cos(__x: std::ffi::c_double) -> std::ffi::c_double;
     fn sin(__x: std::ffi::c_double) -> std::ffi::c_double;
     fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
@@ -1933,7 +1933,7 @@ unsafe extern "C" fn drftb1(
         i += 1;
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_drft_forward(
     l: *mut drft_lookup,
     data: *mut std::ffi::c_float,
@@ -1949,7 +1949,7 @@ pub unsafe extern "C" fn spx_drft_forward(
         (*l).splitcache,
     );
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_drft_backward(
     l: *mut drft_lookup,
     data: *mut std::ffi::c_float,
@@ -1965,7 +1965,7 @@ pub unsafe extern "C" fn spx_drft_backward(
         (*l).splitcache,
     );
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_drft_init(l: *mut drft_lookup, n: std::ffi::c_int) {
     (*l).n = n;
     (*l).trigcache = speex_alloc(
@@ -1981,7 +1981,7 @@ pub unsafe extern "C" fn spx_drft_init(l: *mut drft_lookup, n: std::ffi::c_int) 
     ) as *mut std::ffi::c_int;
     fdrffti(n, (*l).trigcache, (*l).splitcache);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_drft_clear(l: *mut drft_lookup) {
     if !l.is_null() {
         if !((*l).trigcache).is_null() {

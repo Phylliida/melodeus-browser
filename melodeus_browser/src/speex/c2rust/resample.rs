@@ -7,7 +7,7 @@
 #![allow(unused_must_use)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-extern "C" {
+unsafe extern "C" {
     fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
     fn realloc(__ptr: *mut std::ffi::c_void, __size: size_t) -> *mut std::ffi::c_void;
     fn free(__ptr: *mut std::ffi::c_void);
@@ -1311,7 +1311,7 @@ unsafe extern "C" fn update_filter(mut st: *mut SpeexResamplerState) -> std::ffi
     (*st).filt_len = old_length;
     return RESAMPLER_ERR_ALLOC_FAILED as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_init(
     mut nb_channels: spx_uint32_t,
     mut in_rate: spx_uint32_t,
@@ -1329,7 +1329,7 @@ pub unsafe extern "C" fn speex_resampler_init(
         err,
     );
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_init_frac(
     mut nb_channels: spx_uint32_t,
     mut ratio_num: spx_uint32_t,
@@ -1417,7 +1417,7 @@ pub unsafe extern "C" fn speex_resampler_init_frac(
     speex_resampler_destroy(st);
     return NULL as *mut SpeexResamplerState;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_destroy(mut st: *mut SpeexResamplerState) {
     speex_free((*st).mem as *mut std::ffi::c_void);
     speex_free((*st).sinc_table as *mut std::ffi::c_void);
@@ -1491,7 +1491,7 @@ unsafe extern "C" fn speex_resampler_magic(
     *out = (*out).offset(out_len.wrapping_mul((*st).out_stride as spx_uint32_t) as isize);
     return out_len as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_process_float(
     mut st: *mut SpeexResamplerState,
     mut channel_index: spx_uint32_t,
@@ -1565,7 +1565,7 @@ pub unsafe extern "C" fn speex_resampler_process_float(
         RESAMPLER_ERR_SUCCESS as std::ffi::c_int
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_process_int(
     mut st: *mut SpeexResamplerState,
     mut channel_index: spx_uint32_t,
@@ -1670,7 +1670,7 @@ pub unsafe extern "C" fn speex_resampler_process_int(
         RESAMPLER_ERR_SUCCESS as std::ffi::c_int
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_process_interleaved_float(
     mut st: *mut SpeexResamplerState,
     mut in_0: *const std::ffi::c_float,
@@ -1731,7 +1731,7 @@ pub unsafe extern "C" fn speex_resampler_process_interleaved_float(
         RESAMPLER_ERR_SUCCESS as std::ffi::c_int
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_process_interleaved_int(
     mut st: *mut SpeexResamplerState,
     mut in_0: *const spx_int16_t,
@@ -1792,7 +1792,7 @@ pub unsafe extern "C" fn speex_resampler_process_interleaved_int(
         RESAMPLER_ERR_SUCCESS as std::ffi::c_int
     };
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_set_rate(
     mut st: *mut SpeexResamplerState,
     mut in_rate: spx_uint32_t,
@@ -1800,7 +1800,7 @@ pub unsafe extern "C" fn speex_resampler_set_rate(
 ) -> std::ffi::c_int {
     return speex_resampler_set_rate_frac(st, in_rate, out_rate, in_rate, out_rate);
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_rate(
     mut st: *mut SpeexResamplerState,
     mut in_rate: *mut spx_uint32_t,
@@ -1818,7 +1818,7 @@ unsafe extern "C" fn compute_gcd(mut a: spx_uint32_t, mut b: spx_uint32_t) -> sp
     }
     return a;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_set_rate_frac(
     mut st: *mut SpeexResamplerState,
     mut ratio_num: spx_uint32_t,
@@ -1871,7 +1871,7 @@ pub unsafe extern "C" fn speex_resampler_set_rate_frac(
     }
     return RESAMPLER_ERR_SUCCESS as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_ratio(
     mut st: *mut SpeexResamplerState,
     mut ratio_num: *mut spx_uint32_t,
@@ -1880,7 +1880,7 @@ pub unsafe extern "C" fn speex_resampler_get_ratio(
     *ratio_num = (*st).num_rate;
     *ratio_den = (*st).den_rate;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_set_quality(
     mut st: *mut SpeexResamplerState,
     mut quality: std::ffi::c_int,
@@ -1897,48 +1897,48 @@ pub unsafe extern "C" fn speex_resampler_set_quality(
     }
     return RESAMPLER_ERR_SUCCESS as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_quality(
     mut st: *mut SpeexResamplerState,
     mut quality: *mut std::ffi::c_int,
 ) {
     *quality = (*st).quality;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_set_input_stride(
     mut st: *mut SpeexResamplerState,
     mut stride: spx_uint32_t,
 ) {
     (*st).in_stride = stride as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_input_stride(
     mut st: *mut SpeexResamplerState,
     mut stride: *mut spx_uint32_t,
 ) {
     *stride = (*st).in_stride as spx_uint32_t;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_set_output_stride(
     mut st: *mut SpeexResamplerState,
     mut stride: spx_uint32_t,
 ) {
     (*st).out_stride = stride as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_output_stride(
     mut st: *mut SpeexResamplerState,
     mut stride: *mut spx_uint32_t,
 ) {
     *stride = (*st).out_stride as spx_uint32_t;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_input_latency(
     mut st: *mut SpeexResamplerState,
 ) -> std::ffi::c_int {
     return ((*st).filt_len).wrapping_div(2 as spx_uint32_t) as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_get_output_latency(
     mut st: *mut SpeexResamplerState,
 ) -> std::ffi::c_int {
@@ -1948,7 +1948,7 @@ pub unsafe extern "C" fn speex_resampler_get_output_latency(
         .wrapping_add((*st).num_rate >> 1 as std::ffi::c_int)
         .wrapping_div((*st).num_rate) as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_skip_zeros(
     mut st: *mut SpeexResamplerState,
 ) -> std::ffi::c_int {
@@ -1961,7 +1961,7 @@ pub unsafe extern "C" fn speex_resampler_skip_zeros(
     }
     return RESAMPLER_ERR_SUCCESS as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_reset_mem(
     mut st: *mut SpeexResamplerState,
 ) -> std::ffi::c_int {
@@ -1980,7 +1980,7 @@ pub unsafe extern "C" fn speex_resampler_reset_mem(
     }
     return RESAMPLER_ERR_SUCCESS as std::ffi::c_int;
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn speex_resampler_strerror(
     mut err: std::ffi::c_int,
 ) -> *const std::ffi::c_char {
