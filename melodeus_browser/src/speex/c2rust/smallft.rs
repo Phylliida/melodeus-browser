@@ -1,11 +1,26 @@
 #![allow(unused_assignments)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-unsafe extern "C" {
-    fn cos(__x: std::ffi::c_double) -> std::ffi::c_double;
-    fn sin(__x: std::ffi::c_double) -> std::ffi::c_double;
-    fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
-    fn free(__ptr: *mut std::ffi::c_void);
+use crate::speex::c2rust::alloc;
+
+#[inline]
+fn cos(x: std::ffi::c_double) -> std::ffi::c_double {
+    x.cos()
+}
+
+#[inline]
+fn sin(x: std::ffi::c_double) -> std::ffi::c_double {
+    x.sin()
+}
+
+#[inline]
+unsafe fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void {
+    alloc::calloc(__nmemb, __size)
+}
+
+#[inline]
+unsafe fn free(__ptr: *mut std::ffi::c_void) {
+    alloc::free(__ptr);
 }
 #[derive(Copy, Clone)]
 #[repr(C)]

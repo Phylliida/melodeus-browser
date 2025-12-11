@@ -107,52 +107,45 @@ pub mod fftwrap_h {
 }
 pub mod stdio_h {
     use super::FILE_h::FILE;
-    unsafe extern "C" {
-        pub static mut stderr: *mut FILE;
-        pub fn fprintf(
-            __stream: *mut FILE,
-            __format: *const std::ffi::c_char,
-            ...
-        ) -> std::ffi::c_int;
-    }
+    #[allow(non_upper_case_globals)]
+    pub static mut stderr: *mut FILE = std::ptr::null_mut();
 }
 pub mod stdlib_h {
     use super::stddef_h::size_t;
-    unsafe extern "C" {
-        pub fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
-        pub fn free(__ptr: *mut std::ffi::c_void);
+    use crate::speex::c2rust::alloc;
+    #[inline]
+    pub unsafe fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void {
+        alloc::calloc(__nmemb, __size)
+    }
+    #[inline]
+    pub unsafe fn free(__ptr: *mut std::ffi::c_void) {
+        alloc::free(__ptr);
     }
 }
 pub mod os_support_h {
+    use crate::speex::c2rust::alloc;
     #[inline]
     pub unsafe extern "C" fn speex_alloc(
         size: std::ffi::c_int,
     ) -> *mut std::ffi::c_void {
-        return calloc(size as size_t, 1 as size_t);
+        return alloc::calloc(size as size_t, 1 as size_t);
     }
     #[inline]
     pub unsafe extern "C" fn speex_free(ptr: *mut std::ffi::c_void) {
-        free(ptr);
+        alloc::free(ptr);
     }
     #[inline]
     pub unsafe extern "C" fn speex_warning(str: *const std::ffi::c_char) {
-        fprintf(stderr, b"warning: %s\n\0" as *const u8 as *const std::ffi::c_char, str);
+        alloc::warn(str);
     }
     #[inline]
     pub unsafe extern "C" fn speex_warning_int(
         str: *const std::ffi::c_char,
         val: std::ffi::c_int,
     ) {
-        fprintf(
-            stderr,
-            b"warning: %s %d\n\0" as *const u8 as *const std::ffi::c_char,
-            str,
-            val,
-        );
+        alloc::warn_int(str, val);
     }
-    use super::stdlib_h::{calloc, free};
     use super::stddef_h::size_t;
-    use super::stdio_h::{fprintf, stderr};
 }
 pub mod math_approx_h {
     pub const spx_sqrt: unsafe extern "C" fn(std::ffi::c_double) -> std::ffi::c_double = unsafe {

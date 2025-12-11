@@ -7,13 +7,36 @@
 #![allow(unused_must_use)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-unsafe extern "C" {
-    fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
-    fn realloc(__ptr: *mut std::ffi::c_void, __size: size_t) -> *mut std::ffi::c_void;
-    fn free(__ptr: *mut std::ffi::c_void);
-    fn sin(__x: std::ffi::c_double) -> std::ffi::c_double;
-    fn fabs(__x: std::ffi::c_double) -> std::ffi::c_double;
-    fn floor(__x: std::ffi::c_double) -> std::ffi::c_double;
+use crate::speex::c2rust::alloc;
+
+#[inline]
+unsafe fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void {
+    alloc::calloc(__nmemb, __size)
+}
+
+#[inline]
+unsafe fn realloc(__ptr: *mut std::ffi::c_void, __size: size_t) -> *mut std::ffi::c_void {
+    alloc::realloc_bytes(__ptr, __size)
+}
+
+#[inline]
+unsafe fn free(__ptr: *mut std::ffi::c_void) {
+    alloc::free(__ptr);
+}
+
+#[inline]
+fn sin(__x: std::ffi::c_double) -> std::ffi::c_double {
+    __x.sin()
+}
+
+#[inline]
+fn fabs(__x: std::ffi::c_double) -> std::ffi::c_double {
+    __x.abs()
+}
+
+#[inline]
+fn floor(__x: std::ffi::c_double) -> std::ffi::c_double {
+    __x.floor()
 }
 pub type __int16_t = i16;
 pub type __int32_t = i32;

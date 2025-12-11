@@ -16,15 +16,9 @@ pub struct _IO_marker {
     _unused: [u8; 0],
 }
 
+use crate::speex::c2rust::alloc;
+
 unsafe extern "C" {
-    static mut stderr: *mut FILE;
-    fn fprintf(
-        __stream: *mut FILE,
-        __format: *const std::ffi::c_char,
-        ...
-    ) -> std::ffi::c_int;
-    fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
-    fn free(__ptr: *mut std::ffi::c_void);
     fn spx_drft_forward(l: *mut drft_lookup, data: *mut std::ffi::c_float);
     fn spx_drft_backward(l: *mut drft_lookup, data: *mut std::ffi::c_float);
     fn spx_drft_init(l: *mut drft_lookup, n: std::ffi::c_int);
@@ -77,15 +71,15 @@ pub struct drft_lookup {
 }
 #[inline]
 unsafe extern "C" fn speex_alloc(size: std::ffi::c_int) -> *mut std::ffi::c_void {
-    return calloc(size as size_t, 1 as size_t);
+    return alloc::calloc(size as size_t, 1 as size_t);
 }
 #[inline]
 unsafe extern "C" fn speex_free(ptr: *mut std::ffi::c_void) {
-    free(ptr);
+    alloc::free(ptr);
 }
 #[inline]
 unsafe extern "C" fn speex_warning(str: *const std::ffi::c_char) {
-    fprintf(stderr, b"warning: %s\n\0" as *const u8 as *const std::ffi::c_char, str);
+    alloc::warn(str);
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn spx_fft_init(

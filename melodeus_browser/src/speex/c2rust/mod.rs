@@ -19,6 +19,7 @@
     clippy::indexing_slicing
 )]
 
+pub mod alloc;
 pub mod fftwrap;
 pub mod kiss_fft;
 pub mod kiss_fftr;

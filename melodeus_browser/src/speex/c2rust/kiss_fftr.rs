@@ -17,17 +17,9 @@ pub struct _IO_marker {
     _unused: [u8; 0],
 }
 
+use crate::speex::c2rust::alloc;
+
 unsafe extern "C" {
-    static mut stderr: *mut FILE;
-    fn fprintf(
-        __stream: *mut FILE,
-        __format: *const std::ffi::c_char,
-        ...
-    ) -> std::ffi::c_int;
-    fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void;
-    fn exit(__status: std::ffi::c_int) -> !;
-    fn cos(__x: std::ffi::c_double) -> std::ffi::c_double;
-    fn sin(__x: std::ffi::c_double) -> std::ffi::c_double;
     fn kiss_fft_alloc(
         nfft: std::ffi::c_int,
         inverse_fft: std::ffi::c_int,
@@ -35,6 +27,21 @@ unsafe extern "C" {
         lenmem: *mut size_t,
     ) -> kiss_fft_cfg;
     fn kiss_fft(cfg: kiss_fft_cfg, fin: *const kiss_fft_cpx, fout: *mut kiss_fft_cpx);
+}
+
+#[inline]
+fn cos(__x: std::ffi::c_double) -> std::ffi::c_double {
+    __x.cos()
+}
+
+#[inline]
+fn sin(__x: std::ffi::c_double) -> std::ffi::c_double {
+    __x.sin()
+}
+
+#[inline]
+unsafe fn calloc(__nmemb: size_t, __size: size_t) -> *mut std::ffi::c_void {
+    alloc::calloc(__nmemb, __size)
 }
 pub type size_t = usize;
 pub type __off_t = std::ffi::c_long;
@@ -109,19 +116,11 @@ unsafe extern "C" fn _speex_fatal(
     file: *const std::ffi::c_char,
     line: std::ffi::c_int,
 ) {
-    fprintf(
-        stderr,
-        b"Fatal (internal) error in %s, line %d: %s\n\0" as *const u8
-            as *const std::ffi::c_char,
-        file,
-        line,
-        str,
-    );
-    exit(1 as std::ffi::c_int);
+    alloc::fatal(str, file, line);
 }
 #[inline]
 unsafe extern "C" fn speex_warning(str: *const std::ffi::c_char) {
-    fprintf(stderr, b"warning: %s\n\0" as *const u8 as *const std::ffi::c_char, str);
+    alloc::warn(str);
 }
 pub const KISS_FFT_MALLOC: unsafe extern "C" fn(
     std::ffi::c_int,
