@@ -29,6 +29,7 @@ js-sys = "0.3"
 wee_alloc = { version = "0.4.2", optional = true }
 thiserror = "2.0.17"
 ringbuf = "0.4.8"
+console_error_panic_hook = "0.1.5"
 
 aec3 = { path = "../../aec3-rs" }
 rustfft = "6.4.1"
@@ -64,5 +65,3 @@ features = [
 # logging them with `console.error`. This is great for development, but requires
 # all the `std::fmt` and `std::panicking` infrastructure, so it's only enabled
 # in debug mode.
-[target."cfg(debug_assertions)".dependencies]
-console_error_panic_hook = "0.1.5"

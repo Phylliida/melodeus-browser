@@ -21,7 +21,7 @@ const FILTER_LENGTH_MS: usize = 100;
 
 #[wasm_bindgen(start)]
 pub fn main_js() {
-    #[cfg(debug_assertions)]
+    // Always install the panic hook so wasm panics show up in the browser console
     console_error_panic_hook::set_once();
 }
 
