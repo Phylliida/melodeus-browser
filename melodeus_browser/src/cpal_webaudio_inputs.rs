@@ -7,13 +7,7 @@ use js_sys::Array;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{
-    AudioContext, MediaDevices, MediaStream, MediaStreamConstraints, MediaStreamTrack, Navigator,
-};
-
-
-use wasm_bindgen_futures::JsFuture;
-use self::web_sys::{AudioContext, AudioContextOptions, MediaStream, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag, Url};
+use web_sys::{AudioContext, AudioContextOptions, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag, Url};
 use js_sys::{Float32Array};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, RwLock};
@@ -47,7 +41,7 @@ pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsVal
     Ok((media_devices, default_stream))
 }
 
-pub async fn get_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
+pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
     let (media_devices, default_stream) = request_input_access().await?;
 
     // Now enumerate concrete audio input devices and probe each with its deviceId constraint.
@@ -127,30 +121,30 @@ pub async fn get_input_devices() -> Result<Vec<InputDeviceInfo>, JsValue> {
 }
 
 
-pub async fn build_input_stream<D, E>(
+pub async fn build_webaudio_input_stream<D>(
     device_info: InputDeviceInfo,
     data_callback: D,
-    error_callback: E
 ) -> Result<web_sys::AudioContext, JsValue>
     where
         D: FnMut(&[f32]) + Send + 'static,
-        E: FnMut(JsValue) + Send + 'static,
 {
-    Ok(build_input_stream_raw(device_info, data_callback).await.map_err(
-        |err| -> JsValue {
-            (error_callback)(err.clone());
-            err
-        }
-    )?)
+    Ok(build_input_stream_raw(device_info, data_callback).await?)
+    
+    
+    //.map_err(
+    //    |err| -> JsValue {
+    //        (error_callback)(&err.clone());
+    //        err
+    //    }
+    //)?)
 }
 
-pub async fn build_input_stream_raw<D, E>(
+pub async fn build_webaudio_input_stream_raw<D>(
     device_info: InputDeviceInfo,
     mut data_callback: D,
 ) -> Result<web_sys::AudioContext, JsValue>
     where
-        D: FnMut(&[f32]) + Send + 'static,
-        E: FnMut(JsValue) + Send + 'static,
+        D: FnMut(&[f32]) + Send + 'static
 {
 
     let ctx = web_sys::AudioContext::new()?;

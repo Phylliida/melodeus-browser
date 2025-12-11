@@ -212,7 +212,7 @@ pub async fn get_audio_devices() -> Result<JsValue, JsValue> {
             Reflect::set(
                 &js_obj,
                 &JsValue::from_str("sampleRate"),
-                &JsValue::from_f64(info.sample_rate.0 as f64),
+                &JsValue::from_f64(info.sample_rate as f64),
             )?;
             Reflect::set(
                 &js_obj,

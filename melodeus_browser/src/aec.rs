@@ -1071,6 +1071,18 @@ fn create_stream_aligner(channels: usize, input_sample_rate: u32, output_sample_
 
 type StreamId = u64;
 
+#[cfg(not(target_arch = "wasm32"))]
+type InputStream = Stream;
+
+#[cfg(target_arch = "wasm32")]
+type InputStream = WasmStream;
+
+#[cfg(not(target_arch = "wasm32"))]
+type InputDevice = Device;
+
+#[cfg(target_arch = "wasm32")]
+type InputDevice = InputDeviceInfo;
+
 enum OutputStreamMessage {
     Add(StreamId, u32, usize, HashMap<usize, Vec<usize>>, ResampledBufferedCircularProducer, ringbuf::HeapCons<f32>),
     Remove(StreamId),
@@ -1254,29 +1266,6 @@ impl OutputStreamAlignerMixer {
     }
 }
 
-/*
-struct OutputStreamAlignerConsumer {
-    channels: usize,
-    resample_audio_buffer_consumer: BufferedCircularConsumer<f32>,
-}
-
-impl OutputStreamAlignerConsumer {
-    fn new(channels: usize, resample_audio_buffer_consumer: BufferedCircularConsumer<f32>) -> Self {
-        Self {
-            channels: channels,
-            resample_audio_buffer_consumer: resample_audio_buffer_consumer
-        }
-    }
-    fn get_chunk_to_read(&mut self, size: usize) -> Result<&[f32], Box<dyn std::error::Error>> {
-        Ok(self.resample_audio_buffer_consumer.get_chunk_to_read(size))
-    }
-
-    fn finish_read(&mut self, size: usize) -> usize {
-        self.resample_audio_buffer_consumer.finish_read(size)
-    }
-}
-*/
-
 struct InputDeviceConfig {
     host_id: cpal::HostId,
     device_name: String,
@@ -1436,23 +1425,21 @@ impl AecConfig {
     }
 }
 
-fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config: &AecConfig) -> Result<(Stream, StreamAlignerConsumer), Box<dyn std::error::Error>>  {
+async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config: &AecConfig) -> Result<(InputStream, StreamAlignerConsumer), Box<dyn std::error::Error>>  {
 
-    let host = cpal::host_from_id(device_config.host_id)?;
-    let device = select_device(
-        host.input_devices(),
-        &device_config.device_name,
-        "Input",
-    )?;
+    let device = select_input_device(
+        &device_config.host_id,
+        &device_config.device_name
+    ).await?;
 
-    let supported_config = find_matching_device_config(
+    let supported_config = find_matching_input_device_config(
         &device,
         &device_config.device_name,
         device_config.channels,
         device_config.sample_rate,
         device_config.sample_format,
         "Input",
-    )?;
+    )await?;
     
 
     let (producer, mut resampler, consumer) = create_stream_aligner(
@@ -1575,7 +1562,7 @@ fn get_output_stream_aligners(device_config: &OutputDeviceConfig, aec_config: &A
 
 
 enum DeviceUpdateMessage {
-    AddInputDevice(String, Stream, StreamAlignerConsumer),
+    AddInputDevice(String, InputStream, StreamAlignerConsumer),
     RemoveInputDevice(String),
     AddOutputDevice(String, Stream, StreamAlignerConsumer),
     RemoveOutputDevice(String)
@@ -1586,7 +1573,7 @@ struct AecStream {
     aec_config: AecConfig,
     device_update_sender: mpsc::Sender<DeviceUpdateMessage>,
     device_update_receiver: mpsc::Receiver<DeviceUpdateMessage>,
-    input_streams: HashMap<String, Stream>,
+    input_streams: HashMap<String, InputStream>,
     output_streams: HashMap<String, Stream>,
     input_aligners: HashMap<String, StreamAlignerConsumer>,
     input_aligners_in_progress: HashMap<String, StreamAlignerConsumer>,
@@ -1706,13 +1693,13 @@ impl AecStream {
         Ok(())
     }
 
-    fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
-        let (stream, aligners) = get_input_stream_aligners(config, &self.aec_config)?;
+    async fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
+        let (stream, aligners) = get_input_stream_aligners(config, &self.aec_config).await?;
         self.device_update_sender.send(DeviceUpdateMessage::AddInputDevice(config.device_name.clone(), stream, aligners))?;
         Ok(())
     }
 
-    fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
+    async fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
         let (stream, producer, consumer) = get_output_stream_aligners(config, &self.aec_config)?;
         self.device_update_sender.send(DeviceUpdateMessage::AddOutputDevice(config.device_name.clone(), stream, consumer))?;
         Ok(producer)
@@ -2217,6 +2204,54 @@ fn get_host_by_name(target: &str) -> Option<Host> {
     }
     None
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn select_input_device(
+    host_id: &cpal::HostId,
+    device_name: &str
+) -> Result<InputDevice, Box<dyn Error>>
+{
+    let host = cpal::host_from_id(host_id)?;
+    select_device(
+        host.input_devices(),
+        device_name,
+        "Input",
+    )?;
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn select_input_device(
+    host_id: &cpal::HostId,
+    device_name: &str
+) -> Result<InputDevice, Box<dyn Error>>
+{
+    match get_webaudio_input_devices().await {
+        Ok(device_iter) => {
+            let mut available = Vec::new();
+
+            for device in device_iter {
+                let name = device.device_id;
+                available.push(name.clone());
+
+                if &name == device_name {
+                    return Ok(device);
+                }
+            }
+
+            let quoted = available
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "{kind} device matching '{target}' not found. Available: {quoted}"
+            )
+            .into())
+        }
+        Err(err) => Err(format!("Failed to enumerate {kind} devices: {err}").into()),
+    }
+}
+
 fn select_device<I>(
     devices: Result<I, cpal::DevicesError>,
     target: &str,
@@ -2284,6 +2319,44 @@ fn supported_device_configs_to_string(
         })
         .collect::<Vec<_>>()
         .join("\n      "))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn find_matching_input_device_config(
+    device: &InputDevice,
+    device_name: &String,
+    channels: usize,
+    sample_rate: u32,
+    format: SampleFormat,
+) -> Result<SupportedStreamConfig, Box<dyn Error>> {
+    if channels != device.channels || 
+        sample_rate != device.sample_rate ||
+        format != SampleFormat::F32 {
+        let supported_str = format!("{} channel(s), {:?}, sample rate: {}",
+            device.channels, SampleFormat::F32, device.sample_rate);
+        Err(format!(
+            "Input device '{}' does not support {} channel(s), {:?} at {} Hz. Supported configs: {}",
+            device_name, channels, format, sample_rate, supported_str
+        ))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn find_matching_input_device_config(
+    device: &InputDevice,
+    device_name: &String,
+    channels: usize,
+    sample_rate: u32,
+    format: SampleFormat,
+) -> Result<SupportedStreamConfig, Box<dyn Error>> {
+    find_matching_device_config(
+        &(*device as Device),
+        device_name,
+        channels,
+        sample_rate,
+        format,
+        "Input",
+    )
 }
 
 fn find_matching_device_config(
@@ -2386,6 +2459,7 @@ fn build_input_alignment_stream(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_input_alignment_stream_typed<T>(
     device: &Device,
     config: &InputDeviceConfig,
@@ -2402,6 +2476,47 @@ where
     let mut interleaved_buffer =
         Vec::<f32>::with_capacity((per_channel_capacity as usize) * (config.channels as usize));
     
+    let device_name = config.device_name.clone();
+    let device_name_inner = config.device_name.clone();
+    device.build_input_stream(
+        &supported_config.config(),
+        move |data: &[T], _info: &InputCallbackInfo| {
+            if data.is_empty() {
+                return;
+            }
+
+            interleaved_buffer.clear();
+            interleaved_buffer.reserve(data.len()); // usually already sized, but cheap
+            for &s in data {
+                interleaved_buffer.push(f32::from_sample(s));
+            }
+            if let Err(err) = channel_aligner.process_chunk(interleaved_buffer.as_slice()) {
+                eprintln!("Input stream '{device_name_inner}' error when process chunk {err}");
+            }
+        },
+        move |err| eprintln!("Input stream '{device_name}' error: {err}",),
+        None,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_input_alignment_stream_typed<T>(
+    device: &InputDevice,
+    config: &InputDeviceConfig,
+    supported_config: SupportedStreamConfig,
+    mut channel_aligner: StreamAlignerProducer,
+) -> Result<Stream, cpal::BuildStreamError>
+where
+    T: Sample + SizedSample,
+    f32: FromSample<T>,
+{
+    let per_channel_capacity = config.sample_rate
+        .saturating_div(20) // ~50 ms of audio per channel
+        .max(1024);
+    let mut interleaved_buffer =
+        Vec::<f32>::with_capacity((per_channel_capacity as usize) * (config.channels as usize));
+    
+    build_webaudio_input_stream()
     let device_name = config.device_name.clone();
     let device_name_inner = config.device_name.clone();
     device.build_input_stream(
