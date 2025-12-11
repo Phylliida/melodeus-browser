@@ -17,13 +17,8 @@ module.exports = {
   performance: {
     hints: false, // allow larger wasm bundle without noisy warnings
   },
-  resolve: {
-    alias: {
-      env: path.resolve(__dirname, "env-stub.js"),
-    },
-  },
   experiments: {
-    syncWebAssembly: true
+    asyncWebAssembly: true
   },
   devServer: {
     static: {
@@ -36,7 +31,8 @@ module.exports = {
     }),
     new WasmPackPlugin({
       crateDirectory: __dirname,
-      outName: "index"
+      outName: "index",
+      forceMode: "release"
     }),
   ]
 };
