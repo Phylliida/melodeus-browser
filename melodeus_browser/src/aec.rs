@@ -72,12 +72,42 @@ use std::time::{UNIX_EPOCH, SystemTime};
 #[cfg(target_arch = "wasm32")]
 use js_sys::{Date, Promise};
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use hound::{SampleFormat as HoundSampleFormat, WavSpec, WavWriter};
 
 use crate::cpal_webaudio_inputs::get_webaudio_input_devices;
 use crate::cpal_webaudio_inputs::InputDeviceInfo;
 use crate::cpal_webaudio_inputs::build_webaudio_input_stream;
+
+#[inline]
+fn aec_log(msg: impl AsRef<str>) {
+    let msg = msg.as_ref();
+    #[cfg(target_arch = "wasm32")]
+    {
+        use js_sys::{Function, Reflect};
+        let global = js_sys::global();
+        let key = JsValue::from_str("logMessage");
+        if let Ok(val) = Reflect::get(&global, &key) {
+            if let Some(func) = val.dyn_ref::<Function>() {
+                let _ = func.call1(&JsValue::NULL, &JsValue::from_str(msg));
+                return;
+            }
+        }
+        // Fallback if the JS helper isn't present.
+        web_sys::console::log_1(&JsValue::from_str(msg));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        println!("{msg}");
+    }
+}
+
+#[macro_export]
+macro_rules! aec_log {
+    ($($t:tt)*) => {
+        $crate::aec::aec_log(format!($($t)*))
+    };
+}
 
 
 #[inline]
@@ -1509,12 +1539,14 @@ impl AecConfig {
 
 async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config: &AecConfig) -> Result<(InputStream, StreamAlignerConsumer), Box<dyn std::error::Error>>  {
 
+    aec_log("Input stream aligners 1");
     // we need to use these methods instead of the more generic select_device because of wasm wrapping to workaround cpal not having webaudio input device support
     let device = select_input_device(
         &device_config.host_id,
         &device_config.device_name
     ).await?;
 
+    aec_log("Input stream aligners 2");
     let supported_config = find_matching_input_device_config(
         &device,
         &device_config.device_name,
@@ -1524,6 +1556,7 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
     ).await?;
     
 
+    aec_log("Input stream aligners 3");
     let (producer, resampler, consumer) = create_stream_aligner(
         device_config.channels,
         device_config.sample_rate,
@@ -1533,7 +1566,9 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
         device_config.audio_buffer_seconds,
         device_config.resampler_quality)?;
 
+    aec_log("Input stream aligners 4");
     spawn_resampler_loop(resampler);
+    aec_log("Input stream aligners 5");
 
     let stream = build_input_alignment_stream(
         &device,
@@ -1541,6 +1576,7 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
         supported_config,
         producer,
     ).await?;
+    aec_log("Input stream aligners 6");
 
     // start input stream
     cfg_if::cfg_if! {
@@ -1550,6 +1586,8 @@ async fn get_input_stream_aligners(device_config: &InputDeviceConfig, aec_config
             stream.play()?;
         }
     }
+    aec_log("Input stream aligners 7");
+
 
     Ok((stream, consumer))
 }
@@ -1759,14 +1797,19 @@ impl AecStream {
     }
 
     pub async fn add_input_device(&mut self, config: &InputDeviceConfig) -> Result<(), Box<dyn std::error::Error>> {
+        aec_log("Add input device");
         let (stream, aligners) = get_input_stream_aligners(config, &self.aec_config).await?;
+        aec_log("Add input device 2");
         self.device_update_sender.try_send(DeviceUpdateMessage::AddInputDevice(config.device_name.clone(), stream, aligners))?;
+        aec_log("Add input device done");
         Ok(())
     }
 
     pub async fn add_output_device(&mut self, config: &OutputDeviceConfig) -> Result<OutputStreamAlignerProducer, Box<dyn std::error::Error>> {
+        aec_log("Add output device");
         let (stream, producer, consumer) = get_output_stream_aligners(config, &self.aec_config)?;
         self.device_update_sender.try_send(DeviceUpdateMessage::AddOutputDevice(config.device_name.clone(), stream, consumer))?;
+        aec_log("Add output device done");
         Ok(producer)
     }
 
@@ -2024,6 +2067,7 @@ impl AecStream {
     }
 
     pub async fn update(&mut self) -> Result<(&[f32], u128, u128), Box<dyn std::error::Error>> {
+        aec_log("Called update");
         let chunk_size = self.aec_config.frame_size;
         let start_micros = if let Some(start_micros_value) = self.start_micros {
             start_micros_value
@@ -2083,6 +2127,7 @@ impl AecStream {
                 }
             }
         }
+        aec_log("Done update recv try next");
         // similarly, if we initialize an output device here
         // we may not get any audio for a little bit
         if chunk_size == 0 {
@@ -2147,6 +2192,7 @@ impl AecStream {
             }
         }
 
+        aec_log("Done update read aligners");
         let aec_output = if self.output_channels == 0 {
             // simply pass through input_channels, no need for aec
             &self.input_audio_buffer
@@ -2222,6 +2268,7 @@ impl AecStream {
             }
         };
         
+        aec_log("Done aec");
         for (out, sample) in self.aec_out_audio_buffer.iter_mut().zip(aec_output) {
             *out = f32::from_sample(*sample);
         }
@@ -2320,22 +2367,26 @@ async fn select_input_device(
 {
     match get_webaudio_input_devices().await {
         Ok(device_iter) => {
+            aec_log("Got webaudio input devices");
             let mut available = Vec::new();
 
             for device in device_iter {
                 let name = device.device_id.clone();
+                aec_log(format!("Device {name}"));
                 available.push(name.clone());
 
                 if &name == device_name {
+                    aec_log(format!("Device found {name}"));
                     return Ok(device);
                 }
             }
-
             let quoted = available
                 .iter()
                 .map(|name| format!("'{name}'"))
                 .collect::<Vec<_>>()
                 .join(", ");
+
+            aec_log(format!("Failed find device {device_name} available {quoted}"));
             Err(format!(
                 "Input device matching '{device_name}' not found. Available: {quoted}"
             )

@@ -7,6 +7,33 @@ import("./pkg").then(({ list_devices, enable_aec }) => {
   const inputWaveContainer = document.getElementById("input-waves");
   const outputWaveContainer = document.getElementById("output-waves");
   const aecCanvas = document.getElementById("aec-waveform");
+  const logEl = document.getElementById("log");
+
+  const log = (...args) => {
+    const msg = args
+      .map((arg) => {
+        if (arg instanceof Error) return arg.stack || arg.message || String(arg);
+        if (typeof arg === "object") {
+          try {
+            return JSON.stringify(arg);
+          } catch (_) {
+            return String(arg);
+          }
+        }
+        return String(arg);
+      })
+      .join(" ");
+    if (logEl) {
+      const line = document.createElement("div");
+      line.textContent = msg;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    console.log(msg);
+  };
+
+  // Expose a global helper so you can log from the console or other modules.
+  window.logMessage = log;
 
   let devices = { inputs: [], outputs: [] };
   let handle = null;

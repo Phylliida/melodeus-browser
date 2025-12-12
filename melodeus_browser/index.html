@@ -3,6 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <title>Melodeus AEC</title>
+  <style>
+    body { font-family: sans-serif; }
+    #log {
+      border: 1px solid #ccc;
+      padding: 8px;
+      height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: monospace;
+      background: #f7f7f7;
+      margin-top: 8px;
+    }
+  </style>
 </head>
 <body>
   <h2>Devices</h2>
@@ -22,6 +35,9 @@
 
   <h3>AEC output</h3>
   <canvas id="aec-waveform" width="640" height="120"></canvas>
+
+  <h3>Log</h3>
+  <div id="log" aria-live="polite"></div>
   <script type="module" src="./index.js"></script>
 </body>
 </html>

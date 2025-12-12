@@ -22,6 +22,37 @@ pub struct InputDeviceInfo {
 }
 
 
+#[inline]
+fn helper_log(msg: impl AsRef<str>) {
+    let msg = msg.as_ref();
+    #[cfg(target_arch = "wasm32")]
+    {
+        use js_sys::{Function, Reflect};
+        let global = js_sys::global();
+        let key = JsValue::from_str("logMessage");
+        if let Ok(val) = Reflect::get(&global, &key) {
+            if let Some(func) = val.dyn_ref::<Function>() {
+                let _ = func.call1(&JsValue::NULL, &JsValue::from_str(msg));
+                return;
+            }
+        }
+        // Fallback if the JS helper isn't present.
+        web_sys::console::log_1(&JsValue::from_str(msg));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        println!("{msg}");
+    }
+}
+
+#[macro_export]
+macro_rules! helper_log {
+    ($($t:tt)*) => {
+        $crate::aec::helper_log(format!($($t)*))
+    };
+}
+
+
 pub struct WasmStream {
     audio_context: Option<web_sys::AudioContext>,
 }
@@ -98,29 +129,46 @@ fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: u32) -> f64 {
 
 
 pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr> {
+    helper_log("Request input access 1");
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
+    helper_log("Request input access 2");
     let navigator: Navigator = window.navigator();
+    helper_log("Request input access 3");
     let media_devices: MediaDevices = navigator.media_devices()?;
 
+    helper_log("Request input access 4");
     let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&JsValue::from_bool(true));
     constraints.set_video(&JsValue::from_bool(false));
 
+    helper_log("Request input access 5");
     let default_stream = media_devices.get_user_media_with_constraints(&constraints)?;
-    let default_stream = JsFuture::from(default_stream).await?;
+    helper_log("Request input access 6");
+    let default_stream = JsFuture::from(default_stream)
+        .await
+        .map_err(|e| {
+            helper_log(format!("getUserMedia rejected: {e:?}"));
+            e
+        })?;
+    helper_log("Request input access 7");
     let default_stream: MediaStream = default_stream.dyn_into()?;
+    helper_log("Request input access 8");
     Ok((media_devices, default_stream))
 }
 
 pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr> {
+    helper_log("get_webaudio_input_devices 1");
     let (media_devices, default_stream) = request_input_access().await?;
+    helper_log("get_webaudio_input_devices 2");
 
     // Now enumerate concrete audio input devices and probe each with its deviceId constraint.
     let devices = JsFuture::from(media_devices.enumerate_devices()?).await?;
     let devices: js_sys::Array = devices.dyn_into()?;
     let mut infos = Vec::new();
+    helper_log("get_webaudio_input_devices 3");
 
     for device in devices.iter() {
+        helper_log("get_webaudio_input_devices 4");
         let kind = js_sys::Reflect::get(&device, &JsValue::from_str("kind"))
             .ok()
             .and_then(|k| k.as_string());
@@ -135,6 +183,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
         if device_id.is_empty() {
             continue;
         }
+        helper_log(format!("get_webaudio_input_devices 5 {device_id}"));
 
         let label = js_sys::Reflect::get(&device, &JsValue::from_str("label"))
             .ok()
@@ -155,25 +204,32 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
         let _ = js_sys::Reflect::set(&audio_obj, &JsValue::from_str("deviceId"), &device_obj);
         constraints.set_audio(&audio_obj.into());
 
+        helper_log("get_webaudio_input_devices 6");
         let device_stream = media_devices.get_user_media_with_constraints(&constraints)?;
         let device_stream = JsFuture::from(device_stream).await?;
         let device_stream: MediaStream = device_stream.dyn_into()?;
+        helper_log("get_webaudio_input_devices 7");
 
         let test_context = AudioContext::new()?;
+        helper_log("get_webaudio_input_devices 8");
         // Necessary to read sample rate in some browsers.
         let source = test_context.create_media_stream_source(&device_stream)?;
+        helper_log("get_webaudio_input_devices 9");
 
         let sample_rate = test_context.sample_rate() as u32;
         let channels = source.channel_count() as usize;
 
+        helper_log("get_webaudio_input_devices 10");
         // Stop tracks to release the device after probing.
         for track in device_stream.get_tracks().iter() {
             if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
                 track.stop();
             }
         }
+        helper_log("get_webaudio_input_devices 11");
 
         JsFuture::from(test_context.close()?).await?;
+        helper_log("get_webaudio_input_devices 12");
 
         let sample_format = SampleFormat::F32;
 
@@ -185,6 +241,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
             sample_format, // wasm is always f32 sample format
         });
     }
+    helper_log("get_webaudio_input_devices 13");
 
     // Release the default stream we opened to get permission.
     for track in default_stream.get_tracks().iter() {
@@ -192,6 +249,7 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
             track.stop();
         }
     }
+    helper_log("get_webaudio_input_devices 14");
 
     Ok(infos)
 }
