@@ -56,12 +56,14 @@ macro_rules! helper_log {
 
 pub struct WasmStream {
     audio_context: Option<web_sys::AudioContext>,
+    stream: Option<web_sys::MediaStream>,
 }
 
 impl WasmStream {
-    pub fn new(audio_context : web_sys::AudioContext) -> Self {
+    pub fn new(audio_context : web_sys::AudioContext, stream: web_sys::MediaStream) -> Self {
         Self {
-            audio_context: Some(audio_context)
+            audio_context: Some(audio_context),
+            stream: Some(stream),
         }
     }
 
@@ -97,27 +99,35 @@ impl From<JsValue> for JsErr {
     }
 }
 
+async fn cleanup_audio_context(context: web_sys::AudioContext) {
+    match context.close() {
+        Ok(val) => {
+            match JsFuture::from(val).await {
+                Ok(_) => {
+
+                }
+                Err(err) => {
+                    let error_error = JsErr::from(err);
+                    eprintln!("Cleanup wasm stream failed: {error_error}");
+                }
+            }
+        }
+        Err(err) => {
+            let error_error = JsErr::from(err);
+            eprintln!("Cleanup wasm stream failed: {error_error}");
+        }
+    }
+}
+
 impl Drop for WasmStream {
     fn drop(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            cleanup_stream(stream);
+        }
+
         if let Some(ctx) = self.audio_context.take() {
             wasm_bindgen_futures::spawn_local(async move { 
-                match ctx.close() {
-                    Ok(val) => {
-                        match JsFuture::from(val).await {
-                            Ok(_) => {
-
-                            }
-                            Err(err) => {
-                                let error_error = JsErr::from(err);
-                                eprintln!("Cleanup wasm stream failed: {error_error}");
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        let error_error = JsErr::from(err);
-                        eprintln!("Cleanup wasm stream failed: {error_error}");
-                    }
-                }
+                cleanup_audio_context(ctx).await;
             });
         }
     }
@@ -128,17 +138,26 @@ fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: u32) -> f64 {
 }
 
 thread_local! {
-    static INPUT_ACCESS_CACHE: RefCell<Option<(MediaDevices, MediaStream)>> = RefCell::new(None);
+    // Cache the MediaDevices handle after permission is granted. Do not retain the stream; keeping
+    // it alive can hold the microphone and block future getUserMedia calls.
+    static INPUT_ACCESS_CACHE: RefCell<Option<MediaDevices>> = RefCell::new(None);
     static INPUT_DEVICE_CACHE: RefCell<Option<Vec<InputDeviceInfo>>> = RefCell::new(None);
 }
 
-
-
-pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr> {
-    if let Some(cached) = INPUT_ACCESS_CACHE.with(|cell| cell.borrow().clone()) {
-        helper_log("Request input access (cached)");
-        return Ok(cached);
+fn cleanup_stream(stream: web_sys::MediaStream) {
+    let mut tracks_to_remove = Vec::new();
+    for track in stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+            tracks_to_remove.push(track);
+        }
     }
+    for track in tracks_to_remove {
+        track.stop();
+        stream.remove_track(&track);
+    }
+}
+
+pub async fn request_input_access() -> Result<(), JsErr> {
     helper_log("Request input access 1");
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
     helper_log("Request input access 2");
@@ -163,26 +182,20 @@ pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr
     helper_log("Request input access 7");
     let default_stream: MediaStream = default_stream.dyn_into()?;
     helper_log("Request input access 8");
-    for track in default_stream.get_tracks().iter() {
-        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
-            track.stop();
-        }
-    }
-    INPUT_ACCESS_CACHE.with(|cell| {
-        *cell.borrow_mut() = Some((media_devices.clone(), default_stream.clone()));
-    });
-    Ok((media_devices, default_stream))
+    cleanup_stream(default_stream);
+    Ok(())
 }
 
 pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr> {
-    if let Some(cached) = INPUT_DEVICE_CACHE.with(|cell| cell.borrow().clone()) {
-        helper_log("get_webaudio_input_devices (cached)");
-        return Ok(cached);
+    if let Some(cached_input_devices) = INPUT_DEVICE_CACHE.with(|cell| cell.borrow().clone()) {
+        return Ok(cached_input_devices);
     }
-    helper_log("get_webaudio_input_devices 1");
-    let (media_devices, default_stream) = request_input_access().await?;
-    helper_log("get_webaudio_input_devices 2");
-
+    request_input_access().await?;
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
+    helper_log("Requfafafaest input access 2");
+    let navigator: Navigator = window.navigator();
+    helper_log("Requfafafaest input access 3");
+    let media_devices: MediaDevices = navigator.media_devices()?;
     // Now enumerate concrete audio input devices and probe each with its deviceId constraint.
     let devices = JsFuture::from(media_devices.enumerate_devices()?).await?;
     let devices: js_sys::Array = devices.dyn_into()?;
@@ -242,15 +255,10 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
         let channels = source.channel_count() as usize;
 
         helper_log("get_webaudio_input_devices 10");
-        // Stop tracks to release the device after probing.
-        for track in device_stream.get_tracks().iter() {
-            if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
-                track.stop();
-            }
-        }
+        cleanup_stream(device_stream);
         helper_log("get_webaudio_input_devices 11");
-
-        JsFuture::from(test_context.close()?).await?;
+        source.disconnect()?;
+        cleanup_audio_context(test_context).await;
         helper_log("get_webaudio_input_devices 12");
 
         let sample_format = SampleFormat::F32;
@@ -264,19 +272,9 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
         });
     }
     helper_log("get_webaudio_input_devices 13");
-
-    // Release the default stream we opened to get permission.
-    for track in default_stream.get_tracks().iter() {
-        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
-            track.stop();
-        }
-    }
-    helper_log("get_webaudio_input_devices 14");
-
     INPUT_DEVICE_CACHE.with(|cell| {
-        *cell.borrow_mut() = Some(infos.clone());
+        *cell.borrow_mut() = Some(infos.clone()); // clone if you still need `devices` locally
     });
-
     Ok(infos)
 }
 
@@ -288,10 +286,14 @@ pub async fn build_webaudio_input_stream<D>(
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
+    helper_log("Reqaaauest input access 1");
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
+    helper_log("Reqaaaauest input access 2");
+    let navigator: Navigator = window.navigator();
+    helper_log("Reqaaaauest input access 3");
+    let media_devices: MediaDevices = navigator.media_devices()?;
     helper_log("make webaudio audio context 1");
     let ctx = web_sys::AudioContext::new()?;
-    helper_log("make webaudio audio context 2");
-    let (media_devices, default_stream) = request_input_access().await?;
     helper_log("make webaudio audio context 5");
     let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&JsValue::from_bool(true));
@@ -418,5 +420,5 @@ pub async fn build_webaudio_input_stream<D>(
         .set_onmessage(Some(js_func));
 
     helper_log("make webaudio audio context 20");
-    Ok(WasmStream::new(ctx))
+    Ok(WasmStream::new(ctx, stream))
 }

@@ -104,6 +104,33 @@ pub async fn list_devices() -> Result<JsValue, JsValue> {
     .await
     .map_err(js_err)?;
 
+    let inputs = aec::get_supported_input_configs(
+        HISTORY_LEN,
+        CALIBRATION_PACKETS,
+        AUDIO_BUFFER_SECONDS,
+        RESAMPLER_QUALITY,
+    )
+    .await
+    .map_err(js_err)?;
+
+    let inputs = aec::get_supported_input_configs(
+        HISTORY_LEN,
+        CALIBRATION_PACKETS,
+        AUDIO_BUFFER_SECONDS,
+        RESAMPLER_QUALITY,
+    )
+    .await
+    .map_err(js_err)?;
+
+    let inputs = aec::get_supported_input_configs(
+        HISTORY_LEN,
+        CALIBRATION_PACKETS,
+        AUDIO_BUFFER_SECONDS,
+        RESAMPLER_QUALITY,
+    )
+    .await
+    .map_err(js_err)?;
+
     let outputs = aec::get_supported_output_configs(
         HISTORY_LEN,
         CALIBRATION_PACKETS,
