@@ -10,6 +10,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioContext, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag};
 use js_sys::{Float32Array};
 use cpal::SampleFormat;
+use std::cell::RefCell;
 
 /// Discovered details for a specific audio input device obtained via `getUserMedia` constraints.
 #[derive(Clone, Debug)]
@@ -126,9 +127,18 @@ fn buffer_time_step_secs(buffer_size_frames: usize, sample_rate: u32) -> f64 {
     buffer_size_frames as f64 / (sample_rate as f64)
 }
 
+thread_local! {
+    static INPUT_ACCESS_CACHE: RefCell<Option<(MediaDevices, MediaStream)>> = RefCell::new(None);
+    static INPUT_DEVICE_CACHE: RefCell<Option<Vec<InputDeviceInfo>>> = RefCell::new(None);
+}
+
 
 
 pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr> {
+    if let Some(cached) = INPUT_ACCESS_CACHE.with(|cell| cell.borrow().clone()) {
+        helper_log("Request input access (cached)");
+        return Ok(cached);
+    }
     helper_log("Request input access 1");
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
     helper_log("Request input access 2");
@@ -153,10 +163,22 @@ pub async fn request_input_access() -> Result<(MediaDevices, MediaStream), JsErr
     helper_log("Request input access 7");
     let default_stream: MediaStream = default_stream.dyn_into()?;
     helper_log("Request input access 8");
+    for track in default_stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+            track.stop();
+        }
+    }
+    INPUT_ACCESS_CACHE.with(|cell| {
+        *cell.borrow_mut() = Some((media_devices.clone(), default_stream.clone()));
+    });
     Ok((media_devices, default_stream))
 }
 
 pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr> {
+    if let Some(cached) = INPUT_DEVICE_CACHE.with(|cell| cell.borrow().clone()) {
+        helper_log("get_webaudio_input_devices (cached)");
+        return Ok(cached);
+    }
     helper_log("get_webaudio_input_devices 1");
     let (media_devices, default_stream) = request_input_access().await?;
     helper_log("get_webaudio_input_devices 2");
@@ -251,6 +273,10 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
     }
     helper_log("get_webaudio_input_devices 14");
 
+    INPUT_DEVICE_CACHE.with(|cell| {
+        *cell.borrow_mut() = Some(infos.clone());
+    });
+
     Ok(infos)
 }
 
@@ -262,12 +288,11 @@ pub async fn build_webaudio_input_stream<D>(
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
+    helper_log("make webaudio audio context 1");
     let ctx = web_sys::AudioContext::new()?;
-    let window = web_sys::window()
-                        .ok_or_else(|| JsValue::from_str("window not available"))?;
-    let navigator: Navigator = window.navigator();
-    let media_devices: MediaDevices = navigator.media_devices()?;
-
+    helper_log("make webaudio audio context 2");
+    let (media_devices, default_stream) = request_input_access().await?;
+    helper_log("make webaudio audio context 5");
     let constraints = MediaStreamConstraints::new();
     constraints.set_audio(&JsValue::from_bool(true));
 
@@ -280,6 +305,7 @@ pub async fn build_webaudio_input_stream<D>(
     //     exact: deviceId,
     //   },
     // },
+    helper_log("make webaudio audio context 6");
     let audio_obj = js_sys::Object::new();
     let device_obj = js_sys::Object::new();
     let _ = js_sys::Reflect::set(&device_obj, &JsValue::from_str("exact"), &JsValue::from_str(&device_info.device_id));
@@ -289,9 +315,11 @@ pub async fn build_webaudio_input_stream<D>(
     let stream = media_devices.get_user_media_with_constraints(&constraints)?;
     let stream = JsFuture::from(stream).await?;
     let stream: MediaStream = stream.dyn_into()?;
+    helper_log("make webaudio audio context 7");
     
     let source = ctx.create_media_stream_source(&stream)?;
 
+    helper_log("make webaudio audio context 8");
     // must be fetched after call to create_media_stream_source (before that, it will not be populated)
     let _sample_rate = ctx.sample_rate() as u32;
 
@@ -314,27 +342,36 @@ pub async fn build_webaudio_input_stream<D>(
     let type_: BlobPropertyBag = BlobPropertyBag::new();
     type_.set_type("application/javascript");
 
+    helper_log("make webaudio audio context 9");
     let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &type_).unwrap();
 
+    helper_log("make webaudio audio context 10");
     let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
+    helper_log("make webaudio audio context 11");
     let processor = ctx
         .audio_worklet()
         .expect("Failed to get audio worklet")
         .add_module(&url)
         .unwrap();
 
+    helper_log("make webaudio audio context 12");
     JsFuture::from(processor).await.unwrap();
 
+    helper_log("make webaudio audio context 13");
     web_sys::Url::revoke_object_url(&url).unwrap();
 
+    helper_log("make webaudio audio context 14");
     let worklet_node = web_sys::AudioWorkletNode::new(ctx.as_ref(), "cpal-input-processor")
         .expect("Failed to create audio worklet node");
 
+    helper_log("make webaudio audio context 15");
     source.connect_with_audio_node(&worklet_node).unwrap();
 
+    helper_log("make webaudio audio context 16");
     let mut output_buf: Vec<f32> = Vec::new();
 
+    helper_log("make webaudio audio context 17");
     // Float32Array
     let js_closure = Closure::wrap(Box::new(move |msg: wasm_bindgen::JsValue| {
         
@@ -370,13 +407,16 @@ pub async fn build_webaudio_input_stream<D>(
         
         (data_callback)(&mut output_buf.as_slice());
     }) as Box<dyn FnMut(wasm_bindgen::JsValue)>);
+    helper_log("make webaudio audio context 18");
 
     let js_func = js_closure.as_ref().unchecked_ref();
+    helper_log("make webaudio audio context 19");
 
     worklet_node
         .port()
         .expect("Failed to get port")
         .set_onmessage(Some(js_func));
 
+    helper_log("make webaudio audio context 20");
     Ok(WasmStream::new(ctx))
 }
