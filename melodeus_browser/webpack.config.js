@@ -34,5 +34,10 @@ module.exports = {
       outName: "index",
       forceMode: "release"
     }),
+    new CopyPlugin({
+      patterns: [
+        { from: "worklets/cpal-input-processor.js", to: "." },
+      ],
+    }),
   ]
 };

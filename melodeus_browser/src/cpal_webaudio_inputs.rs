@@ -7,7 +7,7 @@ use js_sys::Array;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{AudioContext, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, BlobPropertyBag, MediaStreamAudioSourceNode};
+use web_sys::{AudioContext, MediaStream, MediaStreamTrack, MediaStreamConstraints, MediaDevices, Navigator, MediaStreamAudioSourceNode};
 use js_sys::{Float32Array};
 use cpal::SampleFormat;
 use std::cell::RefCell;
@@ -58,27 +58,37 @@ macro_rules! helper_log {
 
 
 pub struct WasmStream {
-    audio_context: Option<web_sys::AudioContext>
+    device_id: String
 }
 
 impl WasmStream {
-    pub fn new(audio_context : web_sys::AudioContext) -> Self {
+    pub fn new(device_id: String) -> Self {
         Self {
-            audio_context: Some(audio_context)
+            device_id: device_id
         }
     }
 
     pub async fn play(&self) -> Result<(), JsErr> {
-        if let Some(audio_context) = &self.audio_context {
-            JsFuture::from(audio_context.resume()?).await?;
-        }
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
+        let navigator: Navigator = window.navigator();
+        let media_devices: MediaDevices = navigator.media_devices()?;
+    
+        let (device_stream, audio_context, source) = take_cached_stream(&media_devices, &self.device_id).await?;
+
+        JsFuture::from(audio_context.resume()?).await?;
+        put_cached_stream(&self.device_id, device_stream, audio_context, source);
         Ok(())
     }
 
     pub async fn pause(&self) -> Result<(), JsErr> {
-        if let Some(audio_context) = &self.audio_context {
-            JsFuture::from(audio_context.suspend()?).await?;
-        }
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
+        let navigator: Navigator = window.navigator();
+        let media_devices: MediaDevices = navigator.media_devices()?;
+    
+        let (device_stream, audio_context, source) = take_cached_stream(&media_devices, &self.device_id).await?;
+        
+        JsFuture::from(audio_context.suspend()?).await?;
+        put_cached_stream(&self.device_id, device_stream, audio_context, source);
         Ok(())
     }
 }
@@ -174,6 +184,53 @@ pub async fn request_input_access() -> Result<(), JsErr> {
     Ok(())
 }
 
+async fn take_cached_stream(media_devices: &MediaDevices, device_id: &String) -> Result<(MediaStream, AudioContext, MediaStreamAudioSourceNode), JsErr> {
+
+
+    let entry = DEVICE_PROBE_CACHE.with(|cache| cache.borrow_mut().remove(device_id));
+    let (device_stream, audio_context, source) = if let Some(probe) = entry {
+        helper_log("get_webaudio_input_devices (probe cached)");
+        probe
+    } else {
+
+        // Probe the specific device so we can grab its channel count and sample rate.
+        let constraints = MediaStreamConstraints::new();
+        constraints.set_video(&JsValue::from_bool(false));
+
+        let audio_obj = js_sys::Object::new();
+        let device_obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &device_obj,
+            &JsValue::from_str("exact"),
+            &JsValue::from_str(&device_id),
+        );
+        let _ = js_sys::Reflect::set(&audio_obj, &JsValue::from_str("deviceId"), &device_obj);
+        constraints.set_audio(&audio_obj.into());
+
+        let device_stream = media_devices.get_user_media_with_constraints(&constraints)?;
+        let device_stream = JsFuture::from(device_stream).await?;
+        let device_stream: MediaStream = device_stream.dyn_into()?;
+        helper_log("get_webaudio_input_devices 7 (probe create)");
+
+        let audio_context = AudioContext::new()?;
+        JsFuture::from(audio_context.resume().unwrap()).await.unwrap();
+        helper_log("get_webaudio_input_devices 8 (probe create)");
+        // Necessary to read sample rate in some browsers.
+        let source = audio_context.create_media_stream_source(&device_stream)?;
+        helper_log("get_webaudio_input_devices 9 (probe create)");
+
+        (device_stream, audio_context, source)
+    };
+
+    Ok((device_stream, audio_context, source))
+}
+
+fn put_cached_stream(device_name: &String, device_stream: MediaStream, audio_context: AudioContext, source: MediaStreamAudioSourceNode) {
+    DEVICE_PROBE_CACHE.with(|cache| {
+        cache.borrow_mut().insert(device_name.clone(), (device_stream, audio_context, source));
+    });
+}
+
 pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr> {
     if let Some(cached_input_devices) = INPUT_DEVICE_CACHE.with(|cell| cell.borrow().clone()) {
         return Ok(cached_input_devices);
@@ -213,56 +270,23 @@ pub async fn get_webaudio_input_devices() -> Result<Vec<InputDeviceInfo>, JsErr>
             .and_then(|l| l.as_string())
             .filter(|l| !l.is_empty());
 
-        // Probe the specific device so we can grab its channel count and sample rate.
-        let constraints = MediaStreamConstraints::new();
-        constraints.set_video(&JsValue::from_bool(false));
-
-        let audio_obj = js_sys::Object::new();
-        let device_obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(
-            &device_obj,
-            &JsValue::from_str("exact"),
-            &JsValue::from_str(&device_id),
-        );
-        let _ = js_sys::Reflect::set(&audio_obj, &JsValue::from_str("deviceId"), &device_obj);
-        constraints.set_audio(&audio_obj.into());
+        let (device_stream, audio_context, source) = take_cached_stream(&media_devices, &device_id).await?;
 
         helper_log("get_webaudio_input_devices 6");
-        let cached_probe = DEVICE_PROBE_CACHE.with(|cache| cache.borrow().get(&device_id).cloned());
-        let (device_stream, test_context, source) = if let Some(probe) = cached_probe {
-            helper_log("get_webaudio_input_devices (probe cached)");
-            probe
-        } else {
-            let device_stream = media_devices.get_user_media_with_constraints(&constraints)?;
-            let device_stream = JsFuture::from(device_stream).await?;
-            let device_stream: MediaStream = device_stream.dyn_into()?;
-            helper_log("get_webaudio_input_devices 7 (probe create)");
-
-            let test_context = AudioContext::new()?;
-            helper_log("get_webaudio_input_devices 8 (probe create)");
-            // Necessary to read sample rate in some browsers.
-            let source = test_context.create_media_stream_source(&device_stream)?;
-            helper_log("get_webaudio_input_devices 9 (probe create)");
-
-            DEVICE_PROBE_CACHE.with(|cache| {
-                cache.borrow_mut().insert(device_id.clone(), (device_stream.clone(), test_context.clone(), source.clone()));
-            });
-
-            (device_stream, test_context, source)
-        };
-
-        let sample_rate = test_context.sample_rate() as u32;
+        let sample_rate = audio_context.sample_rate() as u32;
         let channels = source.channel_count() as usize;
 
         let sample_format = SampleFormat::F32;
 
         infos.push(InputDeviceInfo {
-            device_id,
+            device_id: device_id.clone(),
             label,
             sample_rate,
             channels,
             sample_format, // wasm is always f32 sample format
         });
+
+        put_cached_stream(&device_id, device_stream, audio_context, source);
     }
     helper_log("get_webaudio_input_devices 13");
     INPUT_DEVICE_CACHE.with(|cell| {
@@ -279,7 +303,7 @@ pub async fn build_webaudio_input_stream<D>(
     where
         D: FnMut(&[f32]) + Send + 'static,
 {
-
+    
     helper_log("Reqaaauest input access 1");
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window not available"))?;
     helper_log("Reqaaaauest input access 2");
@@ -288,80 +312,20 @@ pub async fn build_webaudio_input_stream<D>(
     let media_devices: MediaDevices = navigator.media_devices()?;
     helper_log("make webaudio audio context 1");
 
-    let cached_probe = DEVICE_PROBE_CACHE.with(|cache| cache.borrow().get(&device_info.device_id).cloned());
-    let (device_stream, ctx, source) = if let Some(probe) = cached_probe {
-        helper_log("get_webaudio_input_devices (probe cached)");
-        probe
-    } else {
-
-        // Probe the specific device so we can grab its channel count and sample rate.
-        let constraints = MediaStreamConstraints::new();
-        constraints.set_video(&JsValue::from_bool(false));
-
-        let audio_obj = js_sys::Object::new();
-        let device_obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(
-            &device_obj,
-            &JsValue::from_str("exact"),
-            &JsValue::from_str(&device_info.device_id),
-        );
-        let _ = js_sys::Reflect::set(&audio_obj, &JsValue::from_str("deviceId"), &device_obj);
-        constraints.set_audio(&audio_obj.into());
-
-
-        let device_stream = media_devices.get_user_media_with_constraints(&constraints)?;
-        let device_stream = JsFuture::from(device_stream).await?;
-        let device_stream: MediaStream = device_stream.dyn_into()?;
-        helper_log("get_webaudio_input_devices 7 (probe create)");
-
-        let test_context = AudioContext::new()?;
-        helper_log("get_webaudio_input_devices 8 (probe create)");
-        // Necessary to read sample rate in some browsers.
-        let source = test_context.create_media_stream_source(&device_stream)?;
-        helper_log("get_webaudio_input_devices 9 (probe create)");
-
-        DEVICE_PROBE_CACHE.with(|cache| {
-            cache.borrow_mut().insert(device_info.device_id.clone(), (device_stream.clone(), test_context.clone(), source.clone()));
-        });
-
-        (device_stream, test_context, source)
-    };
+    let (device_stream, audio_context, source) = take_cached_stream(&media_devices, &device_info.device_id).await?;
     
+
+    JsFuture::from(audio_context.resume().unwrap()).await.unwrap();
+
     helper_log("make webaudio audio context 8");
     // must be fetched after call to create_media_stream_source (before that, it will not be populated)
-    let _sample_rate = ctx.sample_rate() as u32;
+    let _sample_rate = audio_context.sample_rate() as u32;
 
-    let processor_js_code = r#"
-        class CpalInputProcessor extends AudioWorkletProcessor {
-            process(inputs, outputs, parameters) {
-                const input = inputs[0]; // only one input device as input, just grab it
-                // it is an array of samples, one array for each channel
-                this.port.postMessage( input );
-                return true;
-            }
-        }
-
-        registerProcessor('cpal-input-processor', CpalInputProcessor);
-    "#;
-
-    let blob_parts = js_sys::Array::new();
-    blob_parts.push(&wasm_bindgen::JsValue::from_str(processor_js_code));
-
-    let type_: BlobPropertyBag = BlobPropertyBag::new();
-    type_.set_type("application/javascript");
-
-    helper_log("make webaudio audio context 9");
-    let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &type_).unwrap();
-
-    helper_log("make webaudio audio context 10");
-    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+    // AudioWorklet module is served as a static file via webpack copy plugin.
+    let url = "cpal-input-processor.js";
     // need to resume or adding worklet will hang
-    if ctx.state() != AudioContextState::Running {
-        JsFuture::from(ctx.resume()?).await?;
-    }
-
     helper_log("make webaudio audio context 11");
-    let audio_worklet = ctx.audio_worklet().map_err(|err| {
+    let audio_worklet = audio_context.audio_worklet().map_err(|err| {
         helper_log("Uh oh didn't work");
         err
     })?;
@@ -371,19 +335,14 @@ pub async fn build_webaudio_input_stream<D>(
         helper_log("Uh oh two didn't work");
         err
     })?;
-    helper_log(url.clone());
-
     helper_log("make webaudio audio context 12");
     JsFuture::from(processor).await.map_err(|err| {
         helper_log("Uh oh three didn't work");
         err
     })?;
 
-    helper_log("make webaudio audio context 13");
-    web_sys::Url::revoke_object_url(&url).unwrap();
-
     helper_log("make webaudio audio context 14");
-    let worklet_node = web_sys::AudioWorkletNode::new(ctx.as_ref(), "cpal-input-processor")
+    let worklet_node = web_sys::AudioWorkletNode::new(audio_context.as_ref(), "cpal-input-processor")
         .expect("Failed to create audio worklet node");
 
     helper_log("make webaudio audio context 15");
@@ -439,5 +398,8 @@ pub async fn build_webaudio_input_stream<D>(
         .set_onmessage(Some(js_func));
 
     helper_log("make webaudio audio context 20");
-    Ok(WasmStream::new(ctx))
+
+    put_cached_stream(&device_info.device_id, device_stream, audio_context, source);
+    
+    Ok(WasmStream::new(device_info.device_id.clone()))
 }
